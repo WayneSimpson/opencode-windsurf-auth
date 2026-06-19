@@ -1206,6 +1206,77 @@ export function getModelVariants(modelId: string): Record<string, VariantMeta> |
   return VARIANT_CATALOG[baseId]?.variants;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Legacy MODEL_* UID lookup — used by dynamic-catalog.ts to map opaque
+// proto-enum UIDs (e.g. MODEL_PRIVATE_2, MODEL_CHAT_O3) to friendly names.
+// Built once from VARIANT_CATALOG at module load. String-UID models are
+// auto-parsed by the dynamic catalog builder; only MODEL_* UIDs need this.
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface LegacyUidEntry {
+  /** Friendly base name (e.g. "claude-sonnet-4.5") */
+  friendlyBase: string;
+  /** Variant key if this UID is a variant (e.g. "thinking"), undefined for base */
+  variant?: string;
+  /** Human description from the catalog entry */
+  description?: string;
+}
+
+const LEGACY_UID_LOOKUP: Map<string, LegacyUidEntry> = (() => {
+  const map = new Map<string, LegacyUidEntry>();
+  for (const entry of Object.values(VARIANT_CATALOG)) {
+    // Entry-level default UID (may be MODEL_* or string UID)
+    if (entry.defaultUid && entry.defaultUid.startsWith('MODEL_')) {
+      map.set(entry.defaultUid, { friendlyBase: entry.id });
+    }
+    // Entry-level default enum → derive MODEL_* UID
+    if (entry.defaultEnum !== undefined) {
+      const uid = enumKeyToCloudUid(
+        // Extract the enum key name from the value by reverse lookup
+        Object.entries(ModelEnum).find(([, v]) => v === entry.defaultEnum)?.[0] ?? '',
+      );
+      if (uid && uid.startsWith('MODEL_') && uid !== 'MODEL_UNSPECIFIED') {
+        map.set(uid, { friendlyBase: entry.id });
+      }
+    }
+    // Variant-level UIDs
+    if (entry.variants) {
+      for (const [variantKey, vMeta] of Object.entries(entry.variants)) {
+        if (vMeta.modelUid && vMeta.modelUid.startsWith('MODEL_')) {
+          map.set(vMeta.modelUid, {
+            friendlyBase: entry.id,
+            variant: variantKey,
+            description: vMeta.description,
+          });
+        }
+        if (vMeta.enumValue !== undefined) {
+          const uid = enumKeyToCloudUid(
+            Object.entries(ModelEnum).find(([, v]) => v === vMeta.enumValue)?.[0] ?? '',
+          );
+          if (uid && uid.startsWith('MODEL_') && uid !== 'MODEL_UNSPECIFIED') {
+            map.set(uid, {
+              friendlyBase: entry.id,
+              variant: variantKey,
+              description: vMeta.description,
+            });
+          }
+        }
+      }
+    }
+  }
+  return map;
+})();
+
+/**
+ * Look up a legacy `MODEL_*` UID in the static catalog to find its
+ * friendly base name and optional variant. Returns `undefined` for
+ * string UIDs (those are auto-parsed by the dynamic catalog builder)
+ * or unrecognized MODEL_* UIDs.
+ */
+export function getLegacyUidLookup(): Map<string, LegacyUidEntry> {
+  return LEGACY_UID_LOOKUP;
+}
+
 // Note on the dual model tables (VARIANT_CATALOG + MODEL_NAME_TO_ENUM):
 //   - VARIANT_CATALOG is the primary source of truth. resolveModel checks it
 //     first and only falls through to MODEL_NAME_TO_ENUM for entries that

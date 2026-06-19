@@ -761,6 +761,8 @@ export interface CloudChatRequest {
   requestType?: number;
   /** Abort signal — closes the fetch stream. */
   signal?: AbortSignal;
+  /** Correlation ID for debug logging — propagated from the plugin's request handler. */
+  debugRequestId?: string;
 }
 
 export class CloudChatError extends Error {

@@ -74,8 +74,11 @@ import {
   getDefaultModel,
   getCanonicalModels,
   getModelVariants,
-  resolveModel,
 } from './plugin/models.js';
+import {
+  resolveModelDynamic,
+  getDynamicModelList,
+} from './plugin/dynamic-catalog.js';
 import { PLUGIN_ID } from './constants.js';
 
 // ============================================================================
@@ -108,6 +111,31 @@ interface ChatCompletionRequest {
     };
   }>;
   providerOptions?: Record<string, unknown>;
+  /** Correlation ID for debug logging — set by the HTTP handler, threaded through to streamChatEvents. */
+  debugRequestId?: string;
+}
+
+/**
+ * Generate or retrieve a debug request ID for log correlation.
+ * If the request already carries one (set by the HTTP handler), reuse it;
+ * otherwise mint a fresh UUID. This lets us trace a single request from
+ * the HTTP handler through the streaming/non-streaming path into the log.
+ */
+function getDebugRequestId(request: { debugRequestId?: string }): string {
+  return typeof request.debugRequestId === 'string' && request.debugRequestId.length > 0
+    ? request.debugRequestId
+    : crypto.randomUUID();
+}
+
+/**
+ * Extract max_tokens from the request, falling back to 128K (the catalog's
+ * most permissive limit). Extracted as a helper so both the streaming and
+ * non-streaming paths share the same resolution logic.
+ */
+function getRequestedMaxTokens(request: { max_tokens?: number }): number {
+  return typeof request.max_tokens === 'number' && request.max_tokens > 0
+    ? request.max_tokens
+    : 128_000;
 }
 
 type ToolDef = NonNullable<ChatCompletionRequest['tools']>[number];
@@ -192,11 +220,20 @@ function createStreamingResponse(
   const variantOverride = extractVariantFromProviderOptions(request.providerOptions);
 
   const abort = new AbortController();
+  // Declare rid outside the try block so the catch block can reference it
+  // for error logging with the same correlation ID.
+  const rid = getDebugRequestId(request);
 
   return new ReadableStream({
     async start(controller) {
       try {
-        const resolved = resolveModel(requestedModel, variantOverride);
+        const host = (credentials.apiServerUrl ?? 'https://server.codeium.com').replace(/\/$/, '');
+        const resolved = await resolveModelDynamic(
+          requestedModel,
+          variantOverride,
+          credentials.apiKey,
+          host,
+        );
 
         const tools = (request.tools ?? []).map((t) => ({
           name: t.function?.name ?? 'unknown',
@@ -225,7 +262,8 @@ function createStreamingResponse(
         let usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number } | null = null;
         let firstChunkSent = false;
         const t0 = Date.now();
-        debugLog.log(`[windsurf-plugin] streamChatEvents starting (model=${resolved.modelUid}, msgs=${multimodalMessages.length}, tools=${tools.length})`);
+        const requestedMaxTokens = getRequestedMaxTokens(request);
+        debugLog.log(`[windsurf-plugin] rid=${rid} pid=${process.pid} stream start model=${requestedModel} upstream_model=${resolved.modelUid} msgs=${multimodalMessages.length} tools=${tools.length} max_tokens=${requestedMaxTokens}`);
         let eventCount = 0;
         let textBytes = 0;
         // Thread the caller's `max_tokens` into the proto's
@@ -242,10 +280,6 @@ function createStreamingResponse(
         //   2. 128_000 fallback — matches the catalog's `maxOutputTokens`
         //      for the most permissive models. The cloud clamps to the
         //      per-model limit anyway.
-        const requestedMaxTokens =
-          typeof request.max_tokens === 'number' && request.max_tokens > 0
-            ? request.max_tokens
-            : 128_000;
         for await (const ev of streamChatEvents({
           apiKey: credentials.apiKey,
           apiServerUrl: credentials.apiServerUrl,
@@ -256,9 +290,10 @@ function createStreamingResponse(
           completionOpts: {
             maxOutputTokens: requestedMaxTokens,
           },
+          debugRequestId: rid,
         })) {
           eventCount++;
-          if (eventCount === 1) debugLog.log(`[windsurf-plugin] streamChatEvents first event after ${Date.now() - t0}ms (kind=${ev.kind})`);
+          if (eventCount === 1) debugLog.log(`[windsurf-plugin] rid=${rid} pid=${process.pid} stream first_event_ms=${Date.now() - t0} kind=${ev.kind}`);
           // @ai-sdk expects `delta.role: 'assistant'` on the *first* chunk
           // of an assistant turn. Inject it into whichever event arrives
           // first (text / tool_call_start / reasoning).
@@ -368,7 +403,7 @@ function createStreamingResponse(
           }
         }
         const finalReason = finishReason ?? (toolCallIndex >= 0 ? 'tool_calls' : 'stop');
-        debugLog.log(`[windsurf-plugin] streamChatEvents finished: ${eventCount} events, ${textBytes}B text, ${toolCallIndex + 1} tool_calls, reason=${finalReason}, usage=${usage ? JSON.stringify(usage) : 'none'}, total=${Date.now() - t0}ms`);
+        debugLog.log(`[windsurf-plugin] rid=${rid} pid=${process.pid} stream finished events=${eventCount} text_bytes=${textBytes} tool_calls=${toolCallIndex + 1} finish_reason=${finalReason} usage=${usage ? JSON.stringify(usage) : 'none'} total_ms=${Date.now() - t0}`);
 
         // Per OpenAI streaming spec (`stream_options.include_usage: true`):
         //   1. Finish chunk: `choices: [{ index, delta: {}, finish_reason }]`
@@ -419,7 +454,7 @@ function createStreamingResponse(
         //      waiting for more deltas),
         //   3. emit `data: [DONE]\n\n` per OpenAI SSE spec.
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        debugLog.log(`[windsurf-plugin] streaming error: ${errorMessage}`);
+        debugLog.log(`[windsurf-plugin] rid=${rid} pid=${process.pid} stream error=${errorMessage}`);
         try {
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify({ error: { message: errorMessage } })}\n\n`),
@@ -459,7 +494,14 @@ async function createNonStreamingResponse(
   const responseId = `chatcmpl-${crypto.randomUUID()}`;
   const requestedModel = request.model || getDefaultModel();
   const variantOverride = extractVariantFromProviderOptions(request.providerOptions);
-  const resolved = resolveModel(requestedModel, variantOverride);
+  const host = (credentials.apiServerUrl ?? 'https://server.codeium.com').replace(/\/$/, '');
+  const resolved = await resolveModelDynamic(
+    requestedModel,
+    variantOverride,
+    credentials.apiKey,
+    host,
+    signal,
+  );
 
   const tools = (request.tools ?? []).map((t) => ({
     name: t.function?.name ?? 'unknown',
@@ -468,13 +510,11 @@ async function createNonStreamingResponse(
   }));
 
   const multimodalMessages: ChatHistoryItem[] = request.messages.map((m) => mapMessageToHistoryItem(m));
+  const rid = getDebugRequestId(request);
 
   const { streamChatEvents } = await import('./cloud-direct/index.js');
 
-  const requestedMaxTokens =
-    typeof request.max_tokens === 'number' && request.max_tokens > 0
-      ? request.max_tokens
-      : 128_000;
+  const requestedMaxTokens = getRequestedMaxTokens(request);
 
   let collected = '';
   let finishReason: 'stop' | 'tool_calls' | 'length' | 'content_filter' = 'stop';
@@ -501,6 +541,7 @@ async function createNonStreamingResponse(
     // non-streaming title-gen / summary call actually stops the upstream
     // cloud request and the billable token usage with it.
     signal,
+    debugRequestId: rid,
   })) {
     if (ev.kind === 'text') {
       collected += ev.text;
@@ -821,8 +862,41 @@ async function ensureWindsurfProxyServer(): Promise<string> {
       const blocked = await authorizeProxyRequest(req);
       if (blocked) return blocked;
 
-      // Models endpoint
+      // Models endpoint — try dynamic catalog from live cloud first,
+      // fall back to static getCanonicalModels() if cloud is unavailable.
       if (url.pathname === '/v1/models' || url.pathname === '/models') {
+        try {
+          const creds = await resolveCredentials();
+          const host = (creds.apiServerUrl ?? 'https://server.codeium.com').replace(/\/$/, '');
+          const dynamicModels = await getDynamicModelList(creds.apiKey, host);
+          if (dynamicModels && dynamicModels.length > 0) {
+            return new Response(
+              JSON.stringify({
+                object: 'list',
+                data: dynamicModels.map((m) => ({
+                  id: m.id,
+                  object: 'model',
+                  created: Math.floor(Date.now() / 1000),
+                  owned_by: 'windsurf',
+                  ...(m.maxTokens ? { max_tokens: m.maxTokens } : {}),
+                  ...(m.supportsImages ? { supports_images: true } : {}),
+                  ...(m.variants
+                    ? {
+                        variants: Object.entries(m.variants).map(([name, v]) => ({
+                          id: name,
+                          description: v.description,
+                        })),
+                      }
+                    : {}),
+                })),
+              }),
+              { status: 200, headers: { 'Content-Type': 'application/json' } }
+            );
+          }
+        } catch {
+          // Dynamic catalog fetch failed — fall through to static
+        }
+        // Static fallback
         const models = getCanonicalModels();
         return new Response(
           JSON.stringify({
@@ -885,7 +959,7 @@ async function ensureWindsurfProxyServer(): Promise<string> {
           // descriptive WindsurfError if neither is available.
           const credentials = await resolveCredentials();
           if (debugLog.enabled) {
-            debugLog.log(`[windsurf-plugin] mode=${credentials.cloudDirect ? 'cloud-direct' : 'local-ls'} api=${credentials.apiServerUrl ?? '(default)'}`);
+            debugLog.log(`[windsurf-plugin] rid=pending pid=${process.pid} mode=${credentials.cloudDirect ? 'cloud-direct' : 'local-ls'} api=${credentials.apiServerUrl ?? '(default)'}`);
           }
           // Reject malformed JSON cleanly (used to coerce to {} and 500
           // when downstream .messages.map blew up).
@@ -902,10 +976,15 @@ async function ensureWindsurfProxyServer(): Promise<string> {
           if (!requestBody || typeof requestBody !== 'object' || !Array.isArray(requestBody.messages)) {
             return openAIError(400, 'Malformed request body — `messages` must be an array.');
           }
+          // Stamp a correlation ID on the request body so both the streaming
+          // and non-streaming paths can log it via getDebugRequestId().
+          requestBody.debugRequestId = crypto.randomUUID();
+          const rid = requestBody.debugRequestId;
+          const requestedMaxTokens = getRequestedMaxTokens(requestBody);
           const isStreaming = requestBody.stream === true;
 
           if (debugLog.enabled) {
-            debugLog.log(`[windsurf-plugin] /v1/chat/completions: model=${requestBody.model} stream=${isStreaming} tools=${Array.isArray(requestBody.tools) ? requestBody.tools.length : 0} msgs=${requestBody.messages?.length ?? 0}`);
+            debugLog.log(`[windsurf-plugin] rid=${rid} pid=${process.pid} /v1/chat/completions model=${requestBody.model} stream=${isStreaming} tools=${Array.isArray(requestBody.tools) ? requestBody.tools.length : 0} msgs=${requestBody.messages?.length ?? 0} max_tokens=${requestedMaxTokens}`);
             for (const m of requestBody.messages ?? []) {
               const txt = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
               debugLog.log(`  msg[${m.role}] (${txt.length}B): ${txt.slice(0, 180).replace(/\n/g, '\\n')}`);
@@ -997,7 +1076,7 @@ async function ensureWindsurfProxyServer(): Promise<string> {
 
   const startup = (async (): Promise<string> => {
     if (debugLog.enabled) {
-      debugLog.log(`[windsurf-plugin] ensureWindsurfProxyServer (hasBunServe=${hasBunServe})`);
+      debugLog.log(`[windsurf-plugin] proxy startup pid=${process.pid} hasBunServe=${hasBunServe} port=${WINDSURF_PROXY_PORT}`);
     }
 
     const startBunServer = (port: number) =>
@@ -1123,17 +1202,17 @@ async function ensureWindsurfProxyServer(): Promise<string> {
 
     const startServer = async (port: number): Promise<{ port: number }> => {
       if (hasBunServe) {
-        debugLog.log(`[windsurf-plugin] calling Bun.serve port=${port}`);
+        debugLog.log(`[windsurf-plugin] proxy bind attempt pid=${process.pid} runtime=bun port=${port}`);
         try {
           const s = startBunServer(port);
-          debugLog.log(`[windsurf-plugin] Bun.serve returned, port=${s.port}`);
+          debugLog.log(`[windsurf-plugin] proxy bind success pid=${process.pid} runtime=bun port=${s.port}`);
           return { port: s.port };
         } catch (e) {
-          debugLog.log(`[windsurf-plugin] Bun.serve threw: ${(e as Error).message}`);
+          debugLog.log(`[windsurf-plugin] proxy bind error pid=${process.pid} runtime=bun port=${port} error=${(e as Error).message}`);
           throw e;
         }
       }
-      debugLog.log(`[windsurf-plugin] using Node http server`);
+      debugLog.log(`[windsurf-plugin] proxy bind attempt pid=${process.pid} runtime=node port=${port}`);
       return startNodeServer(port);
     };
 
@@ -1148,7 +1227,7 @@ async function ensureWindsurfProxyServer(): Promise<string> {
     try {
       const server = await startServer(WINDSURF_PROXY_PORT);
       if (debugLog.enabled) {
-        debugLog.log(`[windsurf-plugin] proxy listening on http://${WINDSURF_PROXY_HOST}:${server.port}/v1 (secret-gated)`);
+        debugLog.log(`[windsurf-plugin] proxy listening pid=${process.pid} url=http://${WINDSURF_PROXY_HOST}:${server.port}/v1 secret_gated=true`);
       }
       return `http://${WINDSURF_PROXY_HOST}:${server.port}/v1`;
     } catch (err) {

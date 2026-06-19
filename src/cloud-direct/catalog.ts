@@ -58,6 +58,16 @@ export interface ModelCatalogEntry {
   label: string;
   /** True when the caller's account tier cannot use this UID for chat. */
   disabled: boolean;
+  /** Per-model context/output limit (ClientModelConfig field #18). */
+  maxTokens?: number;
+  /** Whether the model accepts image attachments (field #5). */
+  supportsImages?: boolean;
+  /** Premium tier flag (field #7). */
+  isPremium?: boolean;
+  /** Beta flag (field #9). */
+  isBeta?: boolean;
+  /** Recommended flag (field #11). */
+  isRecommended?: boolean;
 }
 
 interface CacheEntry {
@@ -141,6 +151,11 @@ async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal):
     let label = '';
     let modelUid = '';
     let disabled = false;
+    let maxTokens: number | undefined;
+    let supportsImages: boolean | undefined;
+    let isPremium: boolean | undefined;
+    let isBeta: boolean | undefined;
+    let isRecommended: boolean | undefined;
     for (const sf of iterFields(f.value as Buffer)) {
       if (sf.num === 1 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         label = (sf.value as Buffer).toString('utf8');
@@ -149,10 +164,34 @@ async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal):
         disabled = sf.value === 1n;
       } else if (sf.num === 22 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         modelUid = (sf.value as Buffer).toString('utf8');
+      } else if (sf.num === 5 && sf.wire === 0) {
+        // #5 = supports_images (bool)
+        supportsImages = sf.value === 1n;
+      } else if (sf.num === 7 && sf.wire === 0) {
+        // #7 = is_premium (bool)
+        isPremium = sf.value === 1n;
+      } else if (sf.num === 9 && sf.wire === 0) {
+        // #9 = is_beta (bool)
+        isBeta = sf.value === 1n;
+      } else if (sf.num === 11 && sf.wire === 0) {
+        // #11 = is_recommended (bool)
+        isRecommended = sf.value === 1n;
+      } else if (sf.num === 18 && sf.wire === 0) {
+        // #18 = max_tokens (int32)
+        maxTokens = Number(sf.value);
       }
     }
     if (modelUid.length > 0) {
-      byUid.set(modelUid, { modelUid, label: label || modelUid, disabled });
+      byUid.set(modelUid, {
+        modelUid,
+        label: label || modelUid,
+        disabled,
+        maxTokens,
+        supportsImages,
+        isPremium,
+        isBeta,
+        isRecommended,
+      });
     }
   }
 
@@ -206,6 +245,23 @@ export async function getCachedCatalog(
       inFlightKey = null;
     }
   }
+}
+
+/**
+ * Get the full catalog entries as a Map keyed by model_uid.
+ *
+ * Returns `null` when the catalog hasn't been fetched yet or the last fetch
+ * failed — the caller should fall back to static tables in that case.
+ *
+ * Reuses the same 10-min TTL cache as `getCachedCatalog`. No extra roundtrip.
+ */
+export async function getCatalogEntries(
+  apiKey: string,
+  host: string,
+  signal?: AbortSignal,
+): Promise<Map<string, ModelCatalogEntry> | null> {
+  const entry = await getCachedCatalog(apiKey, host, signal);
+  return entry?.byUid ?? null;
 }
 
 /**

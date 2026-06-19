@@ -34,6 +34,7 @@ export {
 
 export {
   getCachedCatalog,
+  getCatalogEntries,
   clearCachedCatalog,
   ModelNotAvailableError,
   type ModelCatalogEntry,
