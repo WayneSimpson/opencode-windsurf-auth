@@ -42,8 +42,13 @@ import { getCachedCatalog, ModelNotAvailableError } from './catalog.js';
  * we only trigger when the server has genuinely stopped responding.
  */
 const CLOUD_STREAM_IDLE_MS = 120_000;
-/** Time-to-first-byte timeout. */
-const CLOUD_STREAM_TTFB_MS = 60_000;
+/**
+ * Time-to-first-byte timeout. Set to 120s to accommodate large prompts
+ * (e.g. 476 tool definitions = 54K+ tokens) that legitimately take 50+ seconds
+ * before the cloud sends its first byte. The previous 60s value was too tight
+ * for concurrent subagent first-turn requests and caused false timeouts.
+ */
+const CLOUD_STREAM_TTFB_MS = 120_000;
 
 /**
  * Compose multiple AbortSignals into a single signal that aborts when ANY
@@ -806,11 +811,14 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     }
   }
 
-  // Reuse session + cascade ids across calls for the same (apiKey, host).
-  // Without this, every turn looks like a brand-new server-side session
-  // and the cloud's prompt cache never hits — significant cost regression
-  // for long conversations.
+  // Reuse sessionId across calls for the same (apiKey, host) so the cloud's
+  // prompt cache hits across turns of the same conversation. However, always
+  // allocate a fresh cascadeId per request when the caller doesn't provide one.
+  // Sharing a cascadeId across concurrent unrelated requests (e.g. parallel
+  // opencode subagents) caused cloud-side serialization — the second request
+  // waited behind the first, blowing the TTFB timeout.
   const sessionIds = getOrAllocateSessionIds(req.apiKey, host, req.cascadeId);
+  const cascadeId = req.cascadeId ?? allocateCascadeId();
 
   const proto = buildGetChatMessageRequest({
     apiKey: req.apiKey,
@@ -818,7 +826,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     modelUid: req.modelUid,
     messages: req.messages,
     tools: req.tools,
-    cascadeId: sessionIds.cascadeId,
+    cascadeId,
     promptId: crypto.randomUUID(),
     sessionId: sessionIds.sessionId,
     requestId: BigInt(Date.now()),

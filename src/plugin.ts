@@ -654,7 +654,26 @@ async function createNonStreamingResponse(
 //      loopback-bound CLI bridge.
 
 const WINDSURF_PROXY_HOST = '127.0.0.1';
-const WINDSURF_PROXY_PORT = 42100;
+// Configurable via env var so multiple opencode processes (e.g. the systemd
+// web service and the desktop app's serve process) can each bind their own
+// port without EADDRINUSE conflicts. The plugin's chat.params hook injects
+// the correct baseURL dynamically, so the static value in opencode.jsonc is
+// only a fallback.
+//
+// Auto-detection: when OPENCODE_CLIENT=desktop is set (the desktop app's
+// spawned serve process), we default to 42101 to avoid clashing with the
+// web service on 42100. Explicit WINDSURF_PROXY_PORT always wins.
+const WINDSURF_PROXY_PORT = (() => {
+  const v = process.env.WINDSURF_PROXY_PORT;
+  if (v) {
+    const n = parseInt(v, 10);
+    if (Number.isFinite(n) && n > 0 && n < 65536) return n;
+  }
+  // Desktop app's serve process gets a different default to avoid clashing
+  // with the always-on web service on 42100.
+  if (process.env.OPENCODE_CLIENT === 'desktop') return 42101;
+  return 42100;
+})();
 
 /**
  * 256-bit hex secret minted once per plugin-host process. Lives in module
@@ -1239,6 +1258,8 @@ async function ensureWindsurfProxyServer(): Promise<string> {
         throw new Error(
           `opencode-windsurf-auth: port ${WINDSURF_PROXY_PORT} is already in use by another process. ` +
           `Identify the squatter with \`lsof -nP -iTCP:${WINDSURF_PROXY_PORT} -sTCP:LISTEN\` and kill it, then re-run opencode. ` +
+          `If you are intentionally running multiple opencode processes (e.g. web service + desktop app), ` +
+          `set WINDSURF_PROXY_PORT=<different-port> in the second process's environment to avoid the conflict. ` +
           `(This port is the documented baseURL for the Windsurf provider; we refuse to silently adopt a foreign listener since it would be able to capture your prompts.)`,
         );
       }
