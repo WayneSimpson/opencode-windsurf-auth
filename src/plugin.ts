@@ -654,26 +654,24 @@ async function createNonStreamingResponse(
 //      loopback-bound CLI bridge.
 
 const WINDSURF_PROXY_HOST = '127.0.0.1';
-// Configurable via env var so multiple opencode processes (e.g. the systemd
-// web service and the desktop app's serve process) can each bind their own
-// port without EADDRINUSE conflicts. The plugin's chat.params hook injects
-// the correct baseURL dynamically, so the static value in opencode.jsonc is
-// only a fallback.
-//
-// Auto-detection: when OPENCODE_CLIENT=desktop is set (the desktop app's
-// spawned serve process), we default to 42101 to avoid clashing with the
-// web service on 42100. Explicit WINDSURF_PROXY_PORT always wins.
-const WINDSURF_PROXY_PORT = (() => {
-  const v = process.env.WINDSURF_PROXY_PORT;
-  if (v) {
-    const n = parseInt(v, 10);
-    if (Number.isFinite(n) && n > 0 && n < 65536) return n;
+// Configurable via env var so multiple opencode processes can each bind their
+// own port without EADDRINUSE conflicts. Port 0 delegates selection to the OS;
+// chat.params injects the resulting baseURL into the matching process.
+export function resolveWindsurfProxyPort(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = env.WINDSURF_PROXY_PORT;
+  if (configured !== undefined && configured !== '') {
+    const parsed = Number.parseInt(configured, 10);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed < 65536) return parsed;
   }
-  // Desktop app's serve process gets a different default to avoid clashing
-  // with the always-on web service on 42100.
-  if (process.env.OPENCODE_CLIENT === 'desktop') return 42101;
+
+  // Paseo launches one OpenCode process per active agent, so each child needs
+  // an independent loopback port. The fallback web service keeps 42100.
+  if (env.PASEO_AGENT_ID || env.PASEO_WEB_UI_ENABLED === 'true') return 0;
+  if (env.OPENCODE_CLIENT === 'desktop') return 42101;
   return 42100;
-})();
+}
+
+const WINDSURF_PROXY_PORT = resolveWindsurfProxyPort();
 
 /**
  * 256-bit hex secret minted once per plugin-host process. Lives in module

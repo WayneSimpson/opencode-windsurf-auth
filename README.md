@@ -144,21 +144,21 @@ Credentials are stored mode `0600` at the XDG-config location opencode itself us
 
 ## How it works
 
-opencode loads the plugin from npm via its own cache. The plugin binds a Bearer-gated local proxy at `127.0.0.1:42100`, translates OpenAI-shaped chat requests into Cognition's Connect-RPC `GetChatMessage` wire format, and streams the response back as OpenAI SSE. Tool calls, MCP servers, reasoning deltas, token usage, image attachments — all wired through. No `language_server` runs. Auth uses a loopback OAuth callback on a random ephemeral port; the long-lived `api_key` from `RegisterUser` is then exchanged for a short-lived `user_jwt` on every chat. For the wire-protocol details see [docs/CASCADE_PROTOCOL.md](docs/CASCADE_PROTOCOL.md).
+opencode loads the plugin from npm via its own cache. The plugin binds a Bearer-gated loopback proxy—fixed at `127.0.0.1:42100` for the standalone web service and OS-assigned for Paseo children—translates OpenAI-shaped chat requests into Cognition's Connect-RPC `GetChatMessage` wire format, and streams the response back as OpenAI SSE. Tool calls, MCP servers, reasoning deltas, token usage, image attachments — all wired through. No `language_server` runs. Auth uses a loopback OAuth callback on a random ephemeral port; the long-lived `api_key` from `RegisterUser` is then exchanged for a short-lived `user_jwt` on every chat. For the wire-protocol details see [docs/CASCADE_PROTOCOL.md](docs/CASCADE_PROTOCOL.md).
 
 ## Troubleshooting
 
 <details>
-<summary><strong>Port 42100 is already in use</strong></summary>
+<summary><strong>Windsurf proxy port is already in use</strong></summary>
 
-Another process holds `127.0.0.1:42100`. Find and stop it:
+The standalone web service uses `127.0.0.1:42100`; find a conflicting process with:
 
 ```bash
 lsof -nP -iTCP:42100 -sTCP:LISTEN
 kill -9 <PID>
 ```
 
-The plugin refuses to silently adopt a foreign listener on that port because a squatter could otherwise capture your prompts. Re-run `opencode auth login` after killing the squatter.
+The plugin refuses to silently adopt a foreign listener because a squatter could otherwise capture your prompts. Paseo children normally use OS-assigned loopback ports; only the standalone service should require `42100`. Re-run the affected OpenCode service after removing a stale listener.
 </details>
 
 <details>
