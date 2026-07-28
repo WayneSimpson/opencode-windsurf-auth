@@ -387,6 +387,18 @@ const VARIANT_CATALOG: Record<string, ModelCatalogEntry> = {
     },
     aliases: ['swe-1-6'],
   },
+  // SWE-1.7 — confirmed live in Cognition cloud catalog (2026-07-28).
+  // Three variants: Max (default), Lightning, Medium. All string-UID models.
+  'swe-1.7': {
+    id: 'swe-1.7',
+    defaultUid: 'swe-1-7',
+    variants: {
+      'max': { modelUid: 'swe-1-7', description: 'SWE-1.7 Max' },
+      'lightning': { modelUid: 'swe-1-7-lightning', description: 'SWE-1.7 Lightning' },
+      'medium': { modelUid: 'swe-1-7-medium', description: 'SWE-1.7 Medium' },
+    },
+    aliases: ['swe-1-7'],
+  },
   'deepseek-v4': {
     id: 'deepseek-v4',
     defaultUid: 'deepseek-v4',

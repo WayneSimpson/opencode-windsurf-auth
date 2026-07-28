@@ -1,5 +1,15 @@
 # Changelog
 
+### 2026-07-28 07:35:00 +01:00 — Add SWE-1.7 to static model catalog
+- Type: Added
+- Scope: api
+- Files:
+  - src/plugin/models.ts: add `swe-1.7` entry to VARIANT_CATALOG with three variants (max, lightning, medium) using string UIDs confirmed live in Cognition cloud catalog
+- Rationale: The scout subagent in opencode.jsonc referenced `windsurf/swe-1.7` but the plugin's static catalog only knew about swe-1.5 and swe-1.6. When the dynamic catalog fetch failed, the static fallback threw `UnknownModelError`.
+- Risk/Impact: None — purely additive. Existing model resolution unaffected. Cloud still gates access via `disabled` flag in per-account catalog.
+- Rollback hint: remove the `swe-1.7` entry from VARIANT_CATALOG in models.ts and rebuild.
+- Notes: Cloud UIDs verified via `bun run scripts/sync-models.ts --dump` on 2026-07-28.
+
 ### 2026-07-24 20:51:44 +01:00 — Make Paseo Windsurf proxies process-safe
 - Type: Fixed
 - Scope: api
