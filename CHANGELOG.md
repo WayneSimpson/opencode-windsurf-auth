@@ -1,5 +1,25 @@
 # Changelog
 
+### 2026-07-28 13:45:00 +01:00 — Fix grok-code-fast to use MODEL_PRIVATE_4 (actual cloud UID)
+- Type: Fixed
+- Scope: api
+- Files:
+  - src/plugin/models.ts: add `grok-code-fast` entry to VARIANT_CATALOG with `defaultUid: 'MODEL_PRIVATE_4'`; change MODEL_NAME_TO_ENUM mapping from `GROK_CODE_FAST` (345) to `PRIVATE_4` (222)
+- Rationale: GetCascadeModelConfigs dump shows "Grok Code Fast 1" is served as `MODEL_PRIVATE_4` (enum 222), not `MODEL_XAI_GROK_CODE_FAST` (enum 345). The XAI_GROK prefix fix from 13:35 was correct format but wrong UID — the cloud doesn't serve Grok Code Fast under the XAI namespace, it uses a private slot. The dynamic catalog was mapping MODEL_PRIVATE_4 to `private-4` (its generic name), so `grok-code-fast` fell through to the static catalog which produced the wrong UID.
+- Risk/Impact: Fixes `windsurf/grok-code-fast` model resolution. The `GROK_CODE_FAST` enum (345) is now unused for resolution but kept in types.ts for completeness. `GROK_2` prefix override from 13:35 is still valid (cloud serves grok-2 as MODEL_XAI_GROK_2).
+- Rollback hint: remove the `grok-code-fast` entry from VARIANT_CATALOG and revert MODEL_NAME_TO_ENUM mapping to `ModelEnum.GROK_CODE_FAST`.
+- Notes: Confirmed via `bun run scripts/sync-models.ts --dump`: label "Grok Code Fast 1", modelEnum 222, modelUid "MODEL_PRIVATE_4", maxTokens 256000.
+
+### 2026-07-28 13:35:00 +01:00 — Fix GROK_CODE_FAST and GROK_2 cloud UID prefix
+- Type: Fixed
+- Scope: api
+- Files:
+  - src/plugin/models.ts: add `GROK_CODE_FAST` and `GROK_2` to `ENUM_PREFIX_OVERRIDES` so they produce `MODEL_XAI_GROK_CODE_FAST` and `MODEL_XAI_GROK_2` instead of `MODEL_GROK_CODE_FAST` and `MODEL_GROK_2`
+- Rationale: All Grok models use the `MODEL_XAI_GROK_*` prefix in the Cognition cloud catalog (documented in the comment at line 27). `GROK_3` and `GROK_3_MINI_REASONING` already had overrides, but `GROK_CODE_FAST` and `GROK_2` were missing. The plugin sent `MODEL_GROK_CODE_FAST` which the cloud rejected with "not listed in the Cognition catalog for your account".
+- Risk/Impact: Fixes `windsurf/grok-code-fast` and `windsurf/grok-2` model resolution. No impact on other models.
+- Rollback hint: remove the two lines from `ENUM_PREFIX_OVERRIDES` and rebuild.
+- Notes: Error confirmed in opencode.log: `Model uid "MODEL_GROK_CODE_FAST" is not listed in the Cognition catalog`. The explore subagent in opencode.jsonc uses `windsurf/grok-code-fast`.
+
 ### 2026-07-28 07:35:00 +01:00 — Add SWE-1.7 to static model catalog
 - Type: Added
 - Scope: api

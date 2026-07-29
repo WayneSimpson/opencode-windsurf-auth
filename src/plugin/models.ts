@@ -39,7 +39,9 @@ const ENUM_PREFIX_OVERRIDES: Array<{ enumPrefix: string; uidPrefix: string }> = 
   { enumPrefix: 'GEMINI_3_0_FLASH',        uidPrefix: 'MODEL_GOOGLE_GEMINI_3_0_FLASH' },
   { enumPrefix: 'GEMINI_2_5_PRO',          uidPrefix: 'MODEL_GOOGLE_GEMINI_2_5_PRO' },
   { enumPrefix: 'GROK_3_MINI_REASONING',   uidPrefix: 'MODEL_XAI_GROK_3_MINI_REASONING' },
+  { enumPrefix: 'GROK_CODE_FAST',          uidPrefix: 'MODEL_XAI_GROK_CODE_FAST' },
   { enumPrefix: 'GROK_3',                  uidPrefix: 'MODEL_XAI_GROK_3' },
+  { enumPrefix: 'GROK_2',                  uidPrefix: 'MODEL_XAI_GROK_2' },
 ];
 
 function enumKeyToCloudUid(key: string): string {
@@ -520,6 +522,13 @@ const VARIANT_CATALOG: Record<string, ModelCatalogEntry> = {
       high: { enumValue: ModelEnum.O4_MINI_HIGH, description: 'Higher reasoning' },
     },
   },
+  // Grok Code Fast 1 — cloud serves this as MODEL_PRIVATE_4 (enum 222), not
+  // MODEL_XAI_GROK_CODE_FAST. Confirmed via GetCascadeModelConfigs dump.
+  'grok-code-fast': {
+    id: 'grok-code-fast',
+    defaultUid: 'MODEL_PRIVATE_4',
+    aliases: ['grok-code-fast-1'],
+  },
 
 };
 
@@ -800,7 +809,7 @@ const MODEL_NAME_TO_ENUM: Record<string, ModelEnumValue> = {
   'grok-2': ModelEnum.GROK_2,
   'grok-3': ModelEnum.GROK_3,
   'grok-3-mini': ModelEnum.GROK_3_MINI_REASONING,
-  'grok-code-fast': ModelEnum.GROK_CODE_FAST,
+  'grok-code-fast': ModelEnum.PRIVATE_4,
 
   // ============================================================================
   // Other Models
