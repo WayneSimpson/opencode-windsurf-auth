@@ -432,6 +432,11 @@ if [[ "$RUNTIME_KIND" == "js" ]]; then
     // matters for the log message wording at the bottom of this branch.
     const had = existingWindsurf !== undefined;
     if (!has || force) {
+      // opencode merges variant options into the request body; the plugin
+      // reads providerOptions.windsurf.variant to pick the cloud model_uid.
+      // An empty {} would list a picker entry that silently runs the default.
+      const v = (n) => ({ providerOptions: { windsurf: { variant: n } } });
+      const variants = (...names) => Object.fromEntries(names.map((n) => [n, v(n)]));
       cur.provider.windsurf = {
         name: "Cognition (Windsurf)",
         npm: "@ai-sdk/openai-compatible",
@@ -442,20 +447,16 @@ if [[ "$RUNTIME_KIND" == "js" ]]; then
             limit: { context: 1000000, output: 128000 },
             attachment: true,
             modalities: { input: ["text", "image"], output: ["text"] },
-            variants: {
-              low: {}, medium: {}, high: {}, xhigh: {}, max: {},
-              "low-fast": {}, "medium-fast": {}, "high-fast": {}, "xhigh-fast": {}, "max-fast": {},
-            },
+            variants: variants("low", "medium", "high", "xhigh", "max",
+                               "low-fast", "medium-fast", "high-fast", "xhigh-fast", "max-fast"),
           },
           "gpt-5.5": {
             name: "GPT 5.5",
             limit: { context: 1050000, output: 128000 },
             attachment: true,
             modalities: { input: ["text", "image"], output: ["text"] },
-            variants: {
-              none: {}, low: {}, medium: {}, high: {}, xhigh: {},
-              "none-priority": {}, "low-priority": {}, "medium-priority": {}, "high-priority": {}, "xhigh-priority": {},
-            },
+            variants: variants("none", "low", "medium", "high", "xhigh",
+                               "none-priority", "low-priority", "medium-priority", "high-priority", "xhigh-priority"),
           },
           "kimi-k2.6": {
             name: "Kimi K2.6",
@@ -468,21 +469,21 @@ if [[ "$RUNTIME_KIND" == "js" ]]; then
             limit: { context: 1048576, output: 65536 },
             attachment: true,
             modalities: { input: ["text", "image"], output: ["text"] },
-            variants: { minimal: {}, low: {}, medium: {}, high: {} },
+            variants: variants("minimal", "low", "medium", "high"),
           },
           "claude-opus-4.6": {
             name: "Claude Opus 4.6",
             limit: { context: 1000000, output: 128000 },
             attachment: true,
             modalities: { input: ["text", "image"], output: ["text"] },
-            variants: { thinking: {}, "1m": {}, "thinking-1m": {}, fast: {}, "thinking-fast": {} },
+            variants: variants("thinking", "1m", "thinking-1m", "fast", "thinking-fast"),
           },
           "swe-1.6": {
             name: "SWE 1.6",
             limit: { context: 1000000, output: 128000 },
             attachment: true,
             modalities: { input: ["text", "image"], output: ["text"] },
-            variants: { fast: {}, "fast-low": {}, "fast-medium": {}, "fast-high": {} },
+            variants: variants("fast", "fast-low", "fast-medium", "fast-high"),
           },
           "deepseek-v4": {
             name: "DeepSeek V4",
@@ -600,6 +601,13 @@ has = isinstance(existing_windsurf, dict)
 # — only matters for the log message wording.
 had = "windsurf" in cur["provider"]
 if (not has) or force:
+    # opencode merges a variant's options into the request body; the plugin
+    # reads providerOptions.windsurf.variant to pick the cloud model_uid.
+    # An empty {} would list a picker entry that silently runs the default.
+    def _variant(name):
+        return {"providerOptions": {"windsurf": {"variant": name}}}
+    def _variants(*names):
+        return {n: _variant(n) for n in names}
     cur["provider"]["windsurf"] = {
         "name": "Cognition (Windsurf)",
         "npm": "@ai-sdk/openai-compatible",
@@ -610,20 +618,20 @@ if (not has) or force:
                 "limit": {"context": 1000000, "output": 128000},
                 "attachment": True,
                 "modalities": {"input": ["text", "image"], "output": ["text"]},
-                "variants": {
-                    "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {},
-                    "low-fast": {}, "medium-fast": {}, "high-fast": {}, "xhigh-fast": {}, "max-fast": {},
-                },
+                "variants": _variants(
+                    "low", "medium", "high", "xhigh", "max",
+                    "low-fast", "medium-fast", "high-fast", "xhigh-fast", "max-fast",
+                ),
             },
             "gpt-5.5": {
                 "name": "GPT 5.5",
                 "limit": {"context": 1050000, "output": 128000},
                 "attachment": True,
                 "modalities": {"input": ["text", "image"], "output": ["text"]},
-                "variants": {
-                    "none": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {},
-                    "none-priority": {}, "low-priority": {}, "medium-priority": {}, "high-priority": {}, "xhigh-priority": {},
-                },
+                "variants": _variants(
+                    "none", "low", "medium", "high", "xhigh",
+                    "none-priority", "low-priority", "medium-priority", "high-priority", "xhigh-priority",
+                ),
             },
             "kimi-k2.6": {
                 "name": "Kimi K2.6",
@@ -636,21 +644,21 @@ if (not has) or force:
                 "limit": {"context": 1048576, "output": 65536},
                 "attachment": True,
                 "modalities": {"input": ["text", "image"], "output": ["text"]},
-                "variants": {"minimal": {}, "low": {}, "medium": {}, "high": {}},
+                "variants": _variants("minimal", "low", "medium", "high"),
             },
             "claude-opus-4.6": {
                 "name": "Claude Opus 4.6",
                 "limit": {"context": 1000000, "output": 128000},
                 "attachment": True,
                 "modalities": {"input": ["text", "image"], "output": ["text"]},
-                "variants": {"thinking": {}, "1m": {}, "thinking-1m": {}, "fast": {}, "thinking-fast": {}},
+                "variants": _variants("thinking", "1m", "thinking-1m", "fast", "thinking-fast"),
             },
             "swe-1.6": {
                 "name": "SWE 1.6",
                 "limit": {"context": 1000000, "output": 128000},
                 "attachment": True,
                 "modalities": {"input": ["text", "image"], "output": ["text"]},
-                "variants": {"fast": {}, "fast-low": {}, "fast-medium": {}, "fast-high": {}},
+                "variants": _variants("fast", "fast-low", "fast-medium", "fast-high"),
             },
             "deepseek-v4": {
                 "name": "DeepSeek V4",

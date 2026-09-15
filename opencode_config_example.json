@@ -423,9 +423,9 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "high": {},
-            "nano": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "nano": { "providerOptions": { "windsurf": { "variant": "nano" } } }
           },
           "attachment": true,
           "modalities": {
@@ -462,9 +462,9 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -484,9 +484,9 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -506,9 +506,9 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -528,14 +528,14 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {},
-            "priority": {},
-            "low-priority": {},
-            "high-priority": {},
-            "xhigh-priority": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "priority": { "providerOptions": { "windsurf": { "variant": "priority" } } },
+            "low-priority": { "providerOptions": { "windsurf": { "variant": "low-priority" } } },
+            "high-priority": { "providerOptions": { "windsurf": { "variant": "high-priority" } } },
+            "xhigh-priority": { "providerOptions": { "windsurf": { "variant": "xhigh-priority" } } }
           },
           "attachment": true,
           "modalities": {
@@ -555,8 +555,8 @@
             "output": 100000
           },
           "variants": {
-            "low": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -583,8 +583,8 @@
             "output": 100000
           },
           "variants": {
-            "low": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -604,8 +604,8 @@
             "output": 100000
           },
           "variants": {
-            "low": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -710,10 +710,10 @@
             "output": 65536
           },
           "variants": {
-            "minimal": {},
-            "low": {},
-            "medium": {},
-            "high": {}
+            "minimal": { "providerOptions": { "windsurf": { "variant": "minimal" } } },
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -733,10 +733,10 @@
             "output": 65536
           },
           "variants": {
-            "minimal": {},
-            "low": {},
-            "medium": {},
-            "high": {}
+            "minimal": { "providerOptions": { "windsurf": { "variant": "minimal" } } },
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1031,7 +1031,29 @@
             "output": 8192
           },
           "variants": {
-            "fast": {}
+            "fast": { "providerOptions": { "windsurf": { "variant": "fast" } } }
+          },
+          "attachment": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text"
+            ]
+          }
+        },
+        "swe-2": {
+          "name": "SWE 2",
+          "limit": {
+            "context": 262000,
+            "output": 128000
+          },
+          "variants": {
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "max": { "providerOptions": { "windsurf": { "variant": "max" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1058,14 +1080,14 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {},
-            "low-priority": {},
-            "medium-priority": {},
-            "high-priority": {},
-            "xhigh-priority": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "low-priority": { "providerOptions": { "windsurf": { "variant": "low-priority" } } },
+            "medium-priority": { "providerOptions": { "windsurf": { "variant": "medium-priority" } } },
+            "high-priority": { "providerOptions": { "windsurf": { "variant": "high-priority" } } },
+            "xhigh-priority": { "providerOptions": { "windsurf": { "variant": "xhigh-priority" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1085,16 +1107,16 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {},
-            "max": {},
-            "low-fast": {},
-            "medium-fast": {},
-            "high-fast": {},
-            "xhigh-fast": {},
-            "max-fast": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "max": { "providerOptions": { "windsurf": { "variant": "max" } } },
+            "low-fast": { "providerOptions": { "windsurf": { "variant": "low-fast" } } },
+            "medium-fast": { "providerOptions": { "windsurf": { "variant": "medium-fast" } } },
+            "high-fast": { "providerOptions": { "windsurf": { "variant": "high-fast" } } },
+            "xhigh-fast": { "providerOptions": { "windsurf": { "variant": "xhigh-fast" } } },
+            "max-fast": { "providerOptions": { "windsurf": { "variant": "max-fast" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1114,11 +1136,11 @@
             "output": 128000
           },
           "variants": {
-            "thinking": {},
-            "1m": {},
-            "thinking-1m": {},
-            "fast": {},
-            "thinking-fast": {}
+            "thinking": { "providerOptions": { "windsurf": { "variant": "thinking" } } },
+            "1m": { "providerOptions": { "windsurf": { "variant": "1m" } } },
+            "thinking-1m": { "providerOptions": { "windsurf": { "variant": "thinking-1m" } } },
+            "fast": { "providerOptions": { "windsurf": { "variant": "fast" } } },
+            "thinking-fast": { "providerOptions": { "windsurf": { "variant": "thinking-fast" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1138,9 +1160,9 @@
             "output": 64000
           },
           "variants": {
-            "thinking": {},
-            "1m": {},
-            "thinking-1m": {}
+            "thinking": { "providerOptions": { "windsurf": { "variant": "thinking" } } },
+            "1m": { "providerOptions": { "windsurf": { "variant": "1m" } } },
+            "thinking-1m": { "providerOptions": { "windsurf": { "variant": "thinking-1m" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1160,10 +1182,10 @@
             "output": 65536
           },
           "variants": {
-            "minimal": {},
-            "low": {},
-            "medium": {},
-            "high": {}
+            "minimal": { "providerOptions": { "windsurf": { "variant": "minimal" } } },
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1183,8 +1205,8 @@
             "output": 65536
           },
           "variants": {
-            "low": {},
-            "high": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1204,16 +1226,16 @@
             "output": 128000
           },
           "variants": {
-            "none": {},
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {},
-            "none-priority": {},
-            "low-priority": {},
-            "medium-priority": {},
-            "high-priority": {},
-            "xhigh-priority": {}
+            "none": { "providerOptions": { "windsurf": { "variant": "none" } } },
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "none-priority": { "providerOptions": { "windsurf": { "variant": "none-priority" } } },
+            "low-priority": { "providerOptions": { "windsurf": { "variant": "low-priority" } } },
+            "medium-priority": { "providerOptions": { "windsurf": { "variant": "medium-priority" } } },
+            "high-priority": { "providerOptions": { "windsurf": { "variant": "high-priority" } } },
+            "xhigh-priority": { "providerOptions": { "windsurf": { "variant": "xhigh-priority" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1233,10 +1255,10 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1256,16 +1278,16 @@
             "output": 128000
           },
           "variants": {
-            "none": {},
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {},
-            "none-priority": {},
-            "low-priority": {},
-            "medium-priority": {},
-            "high-priority": {},
-            "xhigh-priority": {}
+            "none": { "providerOptions": { "windsurf": { "variant": "none" } } },
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "none-priority": { "providerOptions": { "windsurf": { "variant": "none-priority" } } },
+            "low-priority": { "providerOptions": { "windsurf": { "variant": "low-priority" } } },
+            "medium-priority": { "providerOptions": { "windsurf": { "variant": "medium-priority" } } },
+            "high-priority": { "providerOptions": { "windsurf": { "variant": "high-priority" } } },
+            "xhigh-priority": { "providerOptions": { "windsurf": { "variant": "xhigh-priority" } } }
           },
           "attachment": true,
           "modalities": {
@@ -1285,14 +1307,14 @@
             "output": 128000
           },
           "variants": {
-            "low": {},
-            "medium": {},
-            "high": {},
-            "xhigh": {},
-            "low-priority": {},
-            "medium-priority": {},
-            "high-priority": {},
-            "xhigh-priority": {}
+            "low": { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high": { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh": { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "low-priority": { "providerOptions": { "windsurf": { "variant": "low-priority" } } },
+            "medium-priority": { "providerOptions": { "windsurf": { "variant": "medium-priority" } } },
+            "high-priority": { "providerOptions": { "windsurf": { "variant": "high-priority" } } },
+            "xhigh-priority": { "providerOptions": { "windsurf": { "variant": "xhigh-priority" } } }
           },
           "attachment": true,
           "modalities": {

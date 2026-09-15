@@ -50,8 +50,16 @@ Paste this into `~/.config/opencode/opencode.json`:
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "variants": {
-            "low": {}, "medium": {}, "high": {}, "xhigh": {}, "max": {},
-            "low-fast": {}, "medium-fast": {}, "high-fast": {}, "xhigh-fast": {}, "max-fast": {}
+            "low":    { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high":   { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh":  { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "max":    { "providerOptions": { "windsurf": { "variant": "max" } } },
+            "low-fast":    { "providerOptions": { "windsurf": { "variant": "low-fast" } } },
+            "medium-fast": { "providerOptions": { "windsurf": { "variant": "medium-fast" } } },
+            "high-fast":   { "providerOptions": { "windsurf": { "variant": "high-fast" } } },
+            "xhigh-fast":  { "providerOptions": { "windsurf": { "variant": "xhigh-fast" } } },
+            "max-fast":    { "providerOptions": { "windsurf": { "variant": "max-fast" } } }
           }
         },
         "gpt-5.5": {
@@ -60,8 +68,16 @@ Paste this into `~/.config/opencode/opencode.json`:
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "variants": {
-            "none": {}, "low": {}, "medium": {}, "high": {}, "xhigh": {},
-            "none-priority": {}, "low-priority": {}, "medium-priority": {}, "high-priority": {}, "xhigh-priority": {}
+            "none":   { "providerOptions": { "windsurf": { "variant": "none" } } },
+            "low":    { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium": { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high":   { "providerOptions": { "windsurf": { "variant": "high" } } },
+            "xhigh":  { "providerOptions": { "windsurf": { "variant": "xhigh" } } },
+            "none-priority":   { "providerOptions": { "windsurf": { "variant": "none-priority" } } },
+            "low-priority":    { "providerOptions": { "windsurf": { "variant": "low-priority" } } },
+            "medium-priority": { "providerOptions": { "windsurf": { "variant": "medium-priority" } } },
+            "high-priority":   { "providerOptions": { "windsurf": { "variant": "high-priority" } } },
+            "xhigh-priority":  { "providerOptions": { "windsurf": { "variant": "xhigh-priority" } } }
           }
         },
         "kimi-k2.6": {
@@ -75,21 +91,37 @@ Paste this into `~/.config/opencode/opencode.json`:
           "limit": { "context": 1048576, "output": 65536 },
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "variants": { "minimal": {}, "low": {}, "medium": {}, "high": {} }
+          "variants": {
+            "minimal": { "providerOptions": { "windsurf": { "variant": "minimal" } } },
+            "low":     { "providerOptions": { "windsurf": { "variant": "low" } } },
+            "medium":  { "providerOptions": { "windsurf": { "variant": "medium" } } },
+            "high":    { "providerOptions": { "windsurf": { "variant": "high" } } }
+          }
         },
         "claude-opus-4.6": {
           "name": "Claude Opus 4.6",
           "limit": { "context": 1000000, "output": 128000 },
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "variants": { "thinking": {}, "1m": {}, "thinking-1m": {}, "fast": {}, "thinking-fast": {} }
+          "variants": {
+            "thinking":      { "providerOptions": { "windsurf": { "variant": "thinking" } } },
+            "1m":            { "providerOptions": { "windsurf": { "variant": "1m" } } },
+            "thinking-1m":   { "providerOptions": { "windsurf": { "variant": "thinking-1m" } } },
+            "fast":          { "providerOptions": { "windsurf": { "variant": "fast" } } },
+            "thinking-fast": { "providerOptions": { "windsurf": { "variant": "thinking-fast" } } }
+          }
         },
         "swe-1.6": {
           "name": "SWE 1.6",
           "limit": { "context": 1000000, "output": 128000 },
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "variants": { "fast": {}, "fast-low": {}, "fast-medium": {}, "fast-high": {} }
+          "variants": {
+            "fast":        { "providerOptions": { "windsurf": { "variant": "fast" } } },
+            "fast-low":    { "providerOptions": { "windsurf": { "variant": "fast-low" } } },
+            "fast-medium": { "providerOptions": { "windsurf": { "variant": "fast-medium" } } },
+            "fast-high":   { "providerOptions": { "windsurf": { "variant": "fast-high" } } }
+          }
         },
         "deepseek-v4": {
           "name": "DeepSeek V4",
@@ -114,11 +146,18 @@ Want the full catalog (94 models, all variants)? Copy [`opencode_config_example.
 
 ```bash
 opencode run --model=windsurf/swe-1.6 "hi"
-opencode run --model=windsurf/claude-opus-4.7:high "what does this codebase do?"
+opencode run --model=windsurf/claude-opus-4.7 --variant high "what does this codebase do?"
 opencode run --model=windsurf/kimi-k2.6 -f screenshot.png -- "describe this image"
 ```
 
-Variants pass through as model suffixes (`:low`, `:high`, `:thinking`, etc.) — same syntax Windsurf's own clients use.
+Pick a reasoning variant with `--variant` on the CLI or the variant selector in the TUI's model dialog. Each entry in a model's `variants` map sends `providerOptions.windsurf.variant` to the plugin, which resolves it to a distinct cloud model UID (`high` → `claude-opus-4-7-high`, etc.). Variant names are the suffixes in the cloud UID — the same names Windsurf's own clients use.
+
+Two gotchas:
+
+- An empty variant (`"high": {}`) lists a picker entry that silently runs the default model — always map the name through `providerOptions` as shown above.
+- If you set `"reasoning": true` on a model, opencode auto-generates `none`/`minimal`/`low`/`medium`/`high`/`xhigh` variants that only send `reasoningEffort` — which the plugin ignores. Declare the model's real variants explicitly and disable the ones that don't exist, e.g. `"minimal": { "disabled": true }`.
+
+(If you call the proxy's `/v1/chat/completions` directly, outside opencode, `"model": "claude-opus-4.7:high"` also works — the colon suffix is resolved plugin-side.)
 
 ## Image attachments
 

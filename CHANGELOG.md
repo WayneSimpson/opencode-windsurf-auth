@@ -1,5 +1,28 @@
 # Changelog
 
+### 2026-09-15 13:05:00 +01:00 — Wire opencode variants to real cloud model UIDs
+- Type: Fixed
+- Scope: config/docs
+- Files:
+  - opencode_config_example.json: replace 102 empty `"variant": {}` picker entries with `providerOptions.windsurf.variant` payloads so selecting a variant actually switches the cloud model_uid
+  - install.sh: emit the same payload shape from both the Node and Python config branches (via small `variants(...)`/`_variants(...)` helpers)
+  - README.md: update the config snippet and replace the stale `model:variant` CLI example with `--variant`; document the empty-`{}` and `reasoning: true` auto-variant traps
+- Rationale: opencode merges a selected variant's options object into the request, and the plugin reads `providerOptions.windsurf.variant` to resolve the cloud uid. Empty `{}` entries produced picker variants that silently ran the default uid. Verified end-to-end on opencode 1.18.30: `--variant medium`/`max` on `windsurf/swe-2` resolved to `swe-2-medium`/`swe-2-max`, and `--variant xhigh` on `windsurf/grok-4.6` resolved to `grok-4-6-xhigh`.
+- Risk/Impact: Variant selections now change the upstream model (the intended behavior). `run -m "model#variant"` crashes opencode 1.18.30 with "Unexpected server error" before reaching the plugin — use `--variant` on the CLI; the `#` syntax is unverified on this build.
+- Rollback hint: restore the previous example config / install.sh variant shapes; no runtime code changed.
+- Notes: Models marked `"reasoning": true` get auto-generated variants (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`, payload `{reasoningEffort}`) which the plugin ignores — hide them with `"name": { "disabled": true }` in the variants map. Variant names unknown to the live catalog fall back to the model's default uid; they are never passed through raw.
+
+### 2026-09-15 12:25:00 +01:00 — Add SWE-2 to static model catalog
+- Type: Added
+- Scope: api
+- Files:
+  - src/plugin/models.ts: add `swe-2` entry to VARIANT_CATALOG with three variants (high, medium, max) using string UIDs confirmed live in Cognition cloud catalog
+  - opencode_config_example.json: add `swe-2` model entry with variants subtree
+- Rationale: Cognition now serves `swe-2-high`, `swe-2-medium`, and `swe-2-max` (262K context, image-capable). The dynamic catalog already resolves them, but the static fallback threw `UnknownModelError` for `windsurf/swe-2*` when the cloud catalog fetch failed — the same failure mode that broke the scout subagent before the swe-1.7 entry was added. There is no bare `swe-2` uid upstream; `swe-2-high` is the default because it is first in the cloud's catalog order and flagged isRecommended, matching what the dynamic catalog resolves bare `swe-2` to.
+- Risk/Impact: None — purely additive. Existing model resolution unaffected.
+- Rollback hint: remove the `swe-2` entry from VARIANT_CATALOG in models.ts and rebuild.
+- Notes: Cloud UIDs verified via `bun run scripts/sync-models.ts --dump` on 2026-09-15. The scout subagent in opencode.jsonc was moved from `windsurf/swe-1-7-medium` to `windsurf/swe-2-medium`.
+
 ### 2026-07-28 13:45:00 +01:00 — Fix grok-code-fast to use MODEL_PRIVATE_4 (actual cloud UID)
 - Type: Fixed
 - Scope: api

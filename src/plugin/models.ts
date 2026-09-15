@@ -401,6 +401,20 @@ const VARIANT_CATALOG: Record<string, ModelCatalogEntry> = {
     },
     aliases: ['swe-1-7'],
   },
+  // SWE-2 — confirmed live in Cognition cloud catalog (2026-09-15).
+  // Three variants: High, Medium, Max. No bare `swe-2` uid exists upstream;
+  // `swe-2-high` is the default because it's first in the cloud's catalog
+  // order (and flagged isRecommended) — matching what the dynamic catalog
+  // resolves bare `swe-2` to. All string-UID models.
+  'swe-2': {
+    id: 'swe-2',
+    defaultUid: 'swe-2-high',
+    variants: {
+      'high': { modelUid: 'swe-2-high', description: 'SWE-2 High' },
+      'medium': { modelUid: 'swe-2-medium', description: 'SWE-2 Medium' },
+      'max': { modelUid: 'swe-2-max', description: 'SWE-2 Max' },
+    },
+  },
   'deepseek-v4': {
     id: 'deepseek-v4',
     defaultUid: 'deepseek-v4',
