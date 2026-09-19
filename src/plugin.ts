@@ -18,6 +18,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { isIP } from 'net';
 import { fileURLToPath } from 'url';
 
 /**
@@ -844,21 +845,10 @@ function openAIError(status: number, message: string, details?: string): Respons
   );
 }
 
-async function ensureWindsurfProxyServer(): Promise<string> {
-  const key = getGlobalKey();
-
-  // Return existing server URL if already started.
-  const slot = slotRegistry[key];
-  if (slot && typeof slot.baseURL === 'string' && slot.baseURL.length > 0) {
-    return slot.baseURL;
-  }
-  // If a startup is in flight, share its promise so concurrent callers don't
-  // race into duplicate Bun.serve() calls or split across two random ports.
-  if (slot && slot.startup instanceof Promise) {
-    return slot.startup;
-  }
-
-  const handler = async (req: Request): Promise<Response> => {
+export function createProxyHandler(
+  authorize: (req: Request) => Promise<Response | null>,
+): (req: Request) => Promise<Response> {
+  return async (req: Request): Promise<Response> => {
     try {
       const url = new URL(req.url);
 
@@ -876,7 +866,7 @@ async function ensureWindsurfProxyServer(): Promise<string> {
 
       // Every other endpoint requires the per-process Bearer secret +
       // loopback origin.
-      const blocked = await authorizeProxyRequest(req);
+      const blocked = await authorize(req);
       if (blocked) return blocked;
 
       // Models endpoint — try dynamic catalog from live cloud first,
@@ -1085,20 +1075,137 @@ async function ensureWindsurfProxyServer(): Promise<string> {
       return openAIError(500, 'Proxy error', message);
     }
   };
+}
 
+interface LoopbackServer {
+  port: number;
+  close(): void;
+}
+
+export function startNodeLoopbackServer(
+  handler: (req: Request) => Promise<Response>,
+  port: number,
+  host: string = WINDSURF_PROXY_HOST,
+): Promise<LoopbackServer> {
+  return new Promise<LoopbackServer>((resolve, reject) => {
+    // Node's http needs a slightly different handler — adapt our Request→Response
+    // handler. We collect headers + body then re-wrap as a WHATWG Request.
+    // Lazy-import to keep the module's top-level imports clean.
+    import('http').then((nodeHttp) => {
+      const srv = nodeHttp.createServer(async (req, res) => {
+        // 32 MB hard cap on inbound request bodies. opencode's largest
+        // legitimate request (huge system prompt + 100+ tools) maxes
+        // around 500 KB. A hostile localhost peer streaming a multi-GB
+        // body used to be able to drive us OOM via Buffer.concat.
+        const MAX_REQ_BODY_BYTES = 32 * 1024 * 1024;
+        // Per-request AbortController so we can propagate client-close
+        // through into our downstream handler (cloud-direct fetch).
+        const abort = new AbortController();
+        req.on('close', () => {
+          if (!res.writableEnded) abort.abort();
+        });
+        try {
+          // Collect body bytes with a size cap. We track total size as
+          // we go and reject overruns immediately instead of buffering
+          // first and counting later.
+          const chunks: Buffer[] = [];
+          let total = 0;
+          let aborted = false;
+          await new Promise<void>((r, rej) => {
+            req.on('data', (c) => {
+              if (aborted) return;
+              const buf = Buffer.from(c);
+              total += buf.length;
+              if (total > MAX_REQ_BODY_BYTES) {
+                aborted = true;
+                // Actively destroy the request socket so the attacker
+                // can't keep streaming bytes we just ignore. Without
+                // this, the previous "set aborted=true and return"
+                // path let the client hold the connection open and
+                // pour data through until the OS-level idle timeout.
+                try { req.destroy(new Error('request body exceeded cap')); } catch { /* */ }
+                rej(Object.assign(new Error('request body too large'), { httpStatus: 413 }));
+                return;
+              }
+              chunks.push(buf);
+            });
+            req.on('end', r);
+            req.on('error', rej);
+            req.on('aborted', () => rej(Object.assign(new Error('client aborted'), { httpStatus: 499 })));
+          });
+          const url = `http://${req.headers.host ?? host}${req.url ?? '/'}`;
+          const headers = new Headers();
+          for (const [k, v] of Object.entries(req.headers)) {
+            if (typeof v === 'string') headers.set(k, v);
+            else if (Array.isArray(v)) headers.set(k, v.join(', '));
+          }
+          const init: RequestInit = {
+            method: req.method,
+            headers,
+            body: chunks.length ? Buffer.concat(chunks) : undefined,
+            signal: abort.signal,
+          };
+          const r0 = new Request(url, init);
+          const r1 = await handler(r0);
+          res.statusCode = r1.status;
+          r1.headers.forEach((v, k) => res.setHeader(k, v));
+          if (r1.body) {
+            const reader = r1.body.getReader();
+            try {
+              while (true) {
+                if (abort.signal.aborted) {
+                  try { await reader.cancel(); } catch { /* */ }
+                  break;
+                }
+                const { value, done } = await reader.read();
+                if (done) break;
+                if (value) {
+                  // res.write returns false on backpressure — wait for drain
+                  const ok = res.write(Buffer.from(value));
+                  if (!ok) await new Promise<void>((r) => res.once('drain', r));
+                }
+              }
+            } finally {
+              try { reader.releaseLock(); } catch { /* */ }
+            }
+          } else {
+            const txt = await r1.text();
+            res.write(txt);
+          }
+          res.end();
+        } catch (e) {
+          const err = e as Error & { httpStatus?: number };
+          try {
+            res.statusCode = err.httpStatus ?? 500;
+            res.end(`error: ${err.message}`);
+          } catch { /* socket already dead */ }
+        }
+      });
+      srv.on('error', reject);
+      srv.listen(port, host, () => {
+        const addr = srv.address();
+        if (!addr || typeof addr === 'string') reject(new Error('bad node http address'));
+        else resolve({ port: addr.port, close: () => srv.close() });
+      });
+    }).catch(reject);
+  });
+}
+
+export async function startLoopbackServer(
+  handler: (req: Request) => Promise<Response>,
+  port: number,
+  host: string = WINDSURF_PROXY_HOST,
+): Promise<LoopbackServer> {
   // Detect Bun and prefer Bun.serve when available (lower latency); fall back
   // to Node http.createServer otherwise so we run in vanilla Node hosts too.
-  const bunServe = globals.Bun?.serve.bind(globals.Bun);
-  const hasBunServe = typeof bunServe === 'function';
-
-  const startup = (async (): Promise<string> => {
-    if (debugLog.enabled) {
-      debugLog.log(`[windsurf-plugin] proxy startup pid=${process.pid} hasBunServe=${hasBunServe} port=${WINDSURF_PROXY_PORT}`);
-    }
-
-    const startBunServer = (port: number) =>
-      bunServe!({
-        hostname: WINDSURF_PROXY_HOST,
+  const bunServe = globals.Bun?.serve.bind(globals.Bun) as
+    | ((opts: unknown) => { port: number; stop(closeActive?: boolean): void })
+    | undefined;
+  if (typeof bunServe === 'function') {
+    debugLog.log(`[windsurf-plugin] proxy bind attempt pid=${process.pid} runtime=bun host=${host} port=${port}`);
+    try {
+      const s = bunServe({
+        hostname: host,
         port,
         fetch: handler,
         // Cascade chat can go silent for >100s during slow-model thinking
@@ -1112,126 +1219,37 @@ async function ensureWindsurfProxyServer(): Promise<string> {
         // pre-check on the headers (which is missing on chunked uploads).
         maxRequestBodySize: 32 * 1024 * 1024,
       });
+      debugLog.log(`[windsurf-plugin] proxy bind success pid=${process.pid} runtime=bun port=${s.port}`);
+      return { port: s.port, close: () => { try { s.stop(true); } catch { /* already closed */ } } };
+    } catch (e) {
+      debugLog.log(`[windsurf-plugin] proxy bind error pid=${process.pid} runtime=bun port=${port} error=${(e as Error).message}`);
+      throw e;
+    }
+  }
+  debugLog.log(`[windsurf-plugin] proxy bind attempt pid=${process.pid} runtime=node host=${host} port=${port}`);
+  return startNodeLoopbackServer(handler, port, host);
+}
 
-    const startNodeServer = (port: number): Promise<{ port: number }> =>
-      new Promise((resolve, reject) => {
-        // Node's http needs a slightly different handler — adapt our Request→Response
-        // handler. We collect headers + body then re-wrap as a WHATWG Request.
-        // Lazy-import to keep the module's top-level imports clean.
-        import('http').then((nodeHttp) => {
-          const srv = nodeHttp.createServer(async (req, res) => {
-            // 32 MB hard cap on inbound request bodies. opencode's largest
-            // legitimate request (huge system prompt + 100+ tools) maxes
-            // around 500 KB. A hostile localhost peer streaming a multi-GB
-            // body used to be able to drive us OOM via Buffer.concat.
-            const MAX_REQ_BODY_BYTES = 32 * 1024 * 1024;
-            // Per-request AbortController so we can propagate client-close
-            // through into our downstream handler (cloud-direct fetch).
-            const abort = new AbortController();
-            req.on('close', () => {
-              if (!res.writableEnded) abort.abort();
-            });
-            try {
-              // Collect body bytes with a size cap. We track total size as
-              // we go and reject overruns immediately instead of buffering
-              // first and counting later.
-              const chunks: Buffer[] = [];
-              let total = 0;
-              let aborted = false;
-              await new Promise<void>((r, rej) => {
-                req.on('data', (c) => {
-                  if (aborted) return;
-                  const buf = Buffer.from(c);
-                  total += buf.length;
-                  if (total > MAX_REQ_BODY_BYTES) {
-                    aborted = true;
-                    // Actively destroy the request socket so the attacker
-                    // can't keep streaming bytes we just ignore. Without
-                    // this, the previous "set aborted=true and return"
-                    // path let the client hold the connection open and
-                    // pour data through until the OS-level idle timeout.
-                    try { req.destroy(new Error('request body exceeded cap')); } catch { /* */ }
-                    rej(Object.assign(new Error('request body too large'), { httpStatus: 413 }));
-                    return;
-                  }
-                  chunks.push(buf);
-                });
-                req.on('end', r);
-                req.on('error', rej);
-                req.on('aborted', () => rej(Object.assign(new Error('client aborted'), { httpStatus: 499 })));
-              });
-              const url = `http://${req.headers.host ?? WINDSURF_PROXY_HOST}${req.url ?? '/'}`;
-              const headers = new Headers();
-              for (const [k, v] of Object.entries(req.headers)) {
-                if (typeof v === 'string') headers.set(k, v);
-                else if (Array.isArray(v)) headers.set(k, v.join(', '));
-              }
-              const init: RequestInit = {
-                method: req.method,
-                headers,
-                body: chunks.length ? Buffer.concat(chunks) : undefined,
-                signal: abort.signal,
-              };
-              const r0 = new Request(url, init);
-              const r1 = await handler(r0);
-              res.statusCode = r1.status;
-              r1.headers.forEach((v, k) => res.setHeader(k, v));
-              if (r1.body) {
-                const reader = r1.body.getReader();
-                try {
-                  while (true) {
-                    if (abort.signal.aborted) {
-                      try { await reader.cancel(); } catch { /* */ }
-                      break;
-                    }
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    if (value) {
-                      // res.write returns false on backpressure — wait for drain
-                      const ok = res.write(Buffer.from(value));
-                      if (!ok) await new Promise<void>((r) => res.once('drain', r));
-                    }
-                  }
-                } finally {
-                  try { reader.releaseLock(); } catch { /* */ }
-                }
-              } else {
-                const txt = await r1.text();
-                res.write(txt);
-              }
-              res.end();
-            } catch (e) {
-              const err = e as Error & { httpStatus?: number };
-              try {
-                res.statusCode = err.httpStatus ?? 500;
-                res.end(`error: ${err.message}`);
-              } catch { /* socket already dead */ }
-            }
-          });
-          srv.on('error', reject);
-          srv.listen(port, WINDSURF_PROXY_HOST, () => {
-            const addr = srv.address();
-            if (!addr || typeof addr === 'string') reject(new Error('bad node http address'));
-            else resolve({ port: addr.port });
-          });
-        }).catch(reject);
-      });
+async function ensureWindsurfProxyServer(): Promise<string> {
+  const key = getGlobalKey();
 
-    const startServer = async (port: number): Promise<{ port: number }> => {
-      if (hasBunServe) {
-        debugLog.log(`[windsurf-plugin] proxy bind attempt pid=${process.pid} runtime=bun port=${port}`);
-        try {
-          const s = startBunServer(port);
-          debugLog.log(`[windsurf-plugin] proxy bind success pid=${process.pid} runtime=bun port=${s.port}`);
-          return { port: s.port };
-        } catch (e) {
-          debugLog.log(`[windsurf-plugin] proxy bind error pid=${process.pid} runtime=bun port=${port} error=${(e as Error).message}`);
-          throw e;
-        }
-      }
-      debugLog.log(`[windsurf-plugin] proxy bind attempt pid=${process.pid} runtime=node port=${port}`);
-      return startNodeServer(port);
-    };
+  // Return existing server URL if already started.
+  const slot = slotRegistry[key];
+  if (slot && typeof slot.baseURL === 'string' && slot.baseURL.length > 0) {
+    return slot.baseURL;
+  }
+  // If a startup is in flight, share its promise so concurrent callers don't
+  // race into duplicate Bun.serve() calls or split across two random ports.
+  if (slot && slot.startup instanceof Promise) {
+    return slot.startup;
+  }
+
+  const handler = createProxyHandler(authorizeProxyRequest);
+
+  const startup = (async (): Promise<string> => {
+    if (debugLog.enabled) {
+      debugLog.log(`[windsurf-plugin] proxy startup pid=${process.pid} port=${WINDSURF_PROXY_PORT}`);
+    }
 
     // Bind the fixed 42100 port. If something's already there we DON'T
     // adopt it — that's the spoof vector — but we DO check whether it's
@@ -1242,7 +1260,7 @@ async function ensureWindsurfProxyServer(): Promise<string> {
     // Reaching this point with EADDRINUSE means a foreign process holds
     // the port — surface a clear error so the user can investigate.
     try {
-      const server = await startServer(WINDSURF_PROXY_PORT);
+      const server = await startLoopbackServer(handler, WINDSURF_PROXY_PORT);
       if (debugLog.enabled) {
         debugLog.log(`[windsurf-plugin] proxy listening pid=${process.pid} url=http://${WINDSURF_PROXY_HOST}:${server.port}/v1 secret_gated=true`);
       }
@@ -1277,6 +1295,185 @@ async function ensureWindsurfProxyServer(): Promise<string> {
 }
 
 // ============================================================================
+// OpenClaw Listener (opt-in)
+// ============================================================================
+//
+// A second, fully independent loopback listener for OpenClaw. It reuses the
+// exact same request pipeline (createProxyHandler → cloud-direct chat,
+// models catalog, streaming, tool calls) but authenticates with a STATIC
+// Bearer token from the environment instead of the per-process PROXY_SECRET
+// or the persisted Windsurf api_key — OpenClaw runs outside this process, so
+// it can never learn either of those.
+//
+//   - Opt-in only: WINDSURF_OPENCLAW_TOKEN must be set to a non-empty value.
+//     When unset the listener is never started and OpenCode behaviour is
+//     completely unchanged.
+//   - WINDSURF_OPENCLAW_PORT picks the port (default 42102). Port 0 lets the
+//     OS assign one (useful for tests).
+//   - WINDSURF_OPENCLAW_HOST picks the bind address (default 127.0.0.1).
+//     Set it to this machine's Tailscale IP (or tailnet hostname) to expose
+//     the endpoint to tailnet peers like OpenClaw on a remote host. Only
+//     this optional listener is affected — the OpenCode listener stays
+//     bound to 127.0.0.1 regardless.
+//   - The token is never logged and never written to disk by us — it lives
+//     only in the process environment and OpenClaw's own config.
+//   - Any startup failure (missing token, EADDRINUSE, ...) is logged to
+//     debugLog and swallowed: the OpenCode listener on its own port must
+//     keep working no matter what happens to this optional extra listener.
+
+const OPENCLAW_DEFAULT_PORT = 42102;
+
+/** Exported for tests. */
+export function resolveOpenClawPort(env: NodeJS.ProcessEnv = process.env): number {
+  const configured = env.WINDSURF_OPENCLAW_PORT;
+  if (configured !== undefined && configured !== '') {
+    const parsed = Number.parseInt(configured, 10);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed < 65536) return parsed;
+  }
+  return OPENCLAW_DEFAULT_PORT;
+}
+
+const OPENCLAW_DEFAULT_HOST = '127.0.0.1';
+
+/**
+ * Exported for tests. Bind address for the OpenClaw listener. Defaults to
+ * loopback; accepts an IPv4/IPv6 literal (e.g. a Tailscale 100.x address)
+ * or a DNS hostname (e.g. a tailnet MagicDNS name). Anything else throws —
+ * the caller treats that as "listener disabled" so a typo can never widen
+ * or break the OpenCode listener.
+ */
+export function resolveOpenClawHost(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.WINDSURF_OPENCLAW_HOST;
+  if (configured === undefined || configured === '') return OPENCLAW_DEFAULT_HOST;
+  const host = configured.trim();
+  // IP literals pass straight through (net.isIP covers v4 + v6).
+  if (isIP(host) !== 0) return host;
+  // DNS hostnames: RFC-952/1123 labels, letters/digits/hyphens, dots between.
+  if (/^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/.test(host)) {
+    return host;
+  }
+  throw new Error(`WINDSURF_OPENCLAW_HOST is not a valid IP or hostname: ${JSON.stringify(configured)}`);
+}
+
+/**
+ * Exported for tests. Returns null when the OpenClaw listener is disabled
+ * (no token configured). Throws when a token IS configured but is unusable
+ * (whitespace-only or non-ASCII — non-ASCII bytes can't round-trip through
+ * an HTTP Authorization header and would fail closed anyway).
+ */
+export function getOpenClawToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  const token = env.WINDSURF_OPENCLAW_TOKEN;
+  if (token === undefined || token === '') return null;
+  if (token.trim().length === 0 || /[^\x21-\x7e]/.test(token)) {
+    throw new Error('WINDSURF_OPENCLAW_TOKEN must be non-blank printable ASCII.');
+  }
+  return token;
+}
+
+/** Exported for tests. Static-token authorizer for the OpenClaw listener. */
+export function createStaticTokenAuthorizer(
+  token: string,
+): (req: Request) => Promise<Response | null> {
+  const expectedBuf = Buffer.from(token, 'utf8');
+  return async (req: Request): Promise<Response | null> => {
+    // Same Origin gate as the OpenCode listener — block non-loopback
+    // browser origins (DNS-rebinding defense).
+    const origin = req.headers.get('origin');
+    if (origin) {
+      let url: URL | null = null;
+      try { url = new URL(origin); } catch { /* fall through */ }
+      const allowed =
+        url &&
+        (url.protocol === 'http:' || url.protocol === 'https:') &&
+        (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '[::1]');
+      if (!allowed) {
+        return openAIError(403, `Forbidden: cross-origin requests are not allowed (Origin=${origin}).`);
+      }
+    }
+
+    const authHeader = req.headers.get('authorization') ?? '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return openAIError(401, 'Unauthorized: missing or malformed Authorization header.');
+    }
+    const presentedBuf = Buffer.from(authHeader.slice('Bearer '.length), 'utf8');
+    if (
+      presentedBuf.length === expectedBuf.length &&
+      crypto.timingSafeEqual(presentedBuf, expectedBuf)
+    ) {
+      return null;
+    }
+    return openAIError(401, 'Unauthorized: Authorization header did not match the expected credential.');
+  };
+}
+
+interface OpenClawRegistrySlot {
+  started?: boolean;
+  startup?: Promise<void>;
+}
+
+/**
+ * Start the optional OpenClaw listener. Never throws — a failure here must
+ * not disturb the OpenCode listener or plugin load. Idempotent per process
+ * via a version-suffixed global slot, same pattern as the main proxy.
+ */
+async function ensureOpenClawListener(): Promise<void> {
+  const key = `${getGlobalKey()}_openclaw`;
+  const registry = globalThis as unknown as Record<string, OpenClawRegistrySlot | undefined>;
+  const slot = registry[key];
+  if (slot?.started) return;
+  if (slot?.startup instanceof Promise) return slot.startup;
+
+  const startup = (async (): Promise<void> => {
+    let token: string | null;
+    try {
+      token = getOpenClawToken();
+    } catch (err) {
+      debugLog.log(`[windsurf-plugin] openclaw listener disabled: ${(err as Error).message}`);
+      return;
+    }
+    if (token === null) return; // not configured — opt-in only
+
+    let host: string;
+    try {
+      host = resolveOpenClawHost();
+    } catch (err) {
+      debugLog.log(`[windsurf-plugin] openclaw listener disabled: ${(err as Error).message}`);
+      return;
+    }
+
+    const port = resolveOpenClawPort();
+    const handler = createProxyHandler(createStaticTokenAuthorizer(token));
+    try {
+      const server = await startLoopbackServer(handler, port, host);
+      debugLog.log(`[windsurf-plugin] openclaw listener ready pid=${process.pid} host=${host} port=${server.port}`);
+    } catch (err) {
+      // EADDRINUSE or any other bind failure: warn (without the token) and
+      // leave the OpenCode listener untouched.
+      const code =
+        err instanceof Error && 'code' in err
+          ? (err as NodeJS.ErrnoException).code
+          : undefined;
+      const hint =
+        code === 'EADDRINUSE'
+          ? `port ${port} is already in use — pick another via WINDSURF_OPENCLAW_PORT`
+          : (err instanceof Error ? err.message : String(err));
+      debugLog.log(`[windsurf-plugin] openclaw listener failed to start: ${hint}`);
+      try {
+        process.stderr.write(`[opencode-windsurf-auth] OpenClaw listener not started: ${hint}\n`);
+      } catch { /* */ }
+    }
+  })();
+
+  registry[key] = { startup };
+  try {
+    await startup;
+    registry[key] = { started: true };
+  } catch {
+    delete registry[key];
+  }
+}
+
+// ============================================================================
 // Plugin Factory
 // ============================================================================
 
@@ -1298,6 +1495,9 @@ export const createWindsurfPlugin =
     const { client } = context ?? ({} as PluginInput);
     // Start proxy server on plugin load
     const proxyBaseURL = await ensureWindsurfProxyServer();
+    // Optional second listener for OpenClaw — opt-in via env, fire-and-
+    // forget so a bind failure there can never break the OpenCode proxy.
+    void ensureOpenClawListener();
 
     return {
       auth: {

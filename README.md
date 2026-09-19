@@ -185,6 +185,51 @@ Credentials are stored mode `0600` at the XDG-config location opencode itself us
 
 opencode loads the plugin from npm via its own cache. The plugin binds a Bearer-gated loopback proxy—fixed at `127.0.0.1:42100` for the standalone web service and OS-assigned for Paseo children—translates OpenAI-shaped chat requests into Cognition's Connect-RPC `GetChatMessage` wire format, and streams the response back as OpenAI SSE. Tool calls, MCP servers, reasoning deltas, token usage, image attachments — all wired through. No `language_server` runs. Auth uses a loopback OAuth callback on a random ephemeral port; the long-lived `api_key` from `RegisterUser` is then exchanged for a short-lived `user_jwt` on every chat. For the wire-protocol details see [docs/CASCADE_PROTOCOL.md](docs/CASCADE_PROTOCOL.md).
 
+## OpenClaw endpoint (opt-in)
+
+OpenClaw can share the same Windsurf/Cognition account through a **separate** loopback listener, so it never touches OpenCode's proxy on `127.0.0.1:42100` or its per-process secret. It is disabled unless you configure it.
+
+In the environment of the process that loads this plugin (the OpenCode service), set:
+
+```bash
+export WINDSURF_OPENCLAW_TOKEN="<generate-a-long-random-token>"   # required — enables the listener
+export WINDSURF_OPENCLAW_PORT=42102                             # optional — this is the default
+# export WINDSURF_OPENCLAW_HOST=127.0.0.1                       # optional — this is the default (loopback only)
+```
+
+Then point OpenClaw at the endpoint as an OpenAI-compatible provider:
+
+```
+baseURL: http://127.0.0.1:42102/v1
+apiKey:  <the same token>
+```
+
+### Remote access over Tailscale
+
+To let an OpenClaw instance on another machine reach the listener directly over Tailscale, bind it to this machine's Tailscale address instead of loopback:
+
+```bash
+export WINDSURF_OPENCLAW_HOST=100.102.46.68                     # this machine's Tailscale IP (tailscale ip -4)
+export WINDSURF_OPENCLAW_PORT=42102
+export WINDSURF_OPENCLAW_TOKEN="<generate-a-long-random-token>"
+```
+
+OpenClaw then uses the tailnet address (IP or MagicDNS name) as the baseURL:
+
+```
+baseURL: http://media-server.tail9c6d49.ts.net:42102/v1
+apiKey:  <the same token>
+```
+
+The Bearer token is still required on every `/v1/*` request — the endpoint is reachable from the tailnet but not open. Only the OpenClaw listener binds the Tailscale address; the OpenCode proxy stays on `127.0.0.1`. An invalid `WINDSURF_OPENCLAW_HOST` disables only the OpenClaw listener and is logged.
+
+Notes:
+
+- The token is static and shared only with OpenClaw. It is never logged or written to disk by the plugin — keep it out of git.
+- `/v1/models` and `/v1/chat/completions` behave exactly like the OpenCode endpoint (streaming, tool calls, reasoning, images). `/health` is unauthenticated and returns `{ "ok": true }`.
+- If the port is taken or the token is missing/invalid, only the OpenClaw listener fails — OpenCode keeps working. Check `WINDSURF_PLUGIN_DEBUG=1` logs for the reason.
+- Both listeners share the same upstream account, so they share upstream quotas and rate limits.
+
 ## Troubleshooting
 
 <details>
