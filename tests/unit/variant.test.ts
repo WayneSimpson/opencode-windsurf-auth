@@ -1,9 +1,34 @@
 import { describe, expect, test } from 'bun:test';
 import { resolveModel, getModelVariants } from '../../src/plugin/models.js';
+import { parseFamilyUid } from '../../src/plugin/dynamic-catalog.js';
 
 // Pins the variant-resolution contract against the live Cognition model catalog
 // (see src/plugin/models.ts auto-generated block + family-less manual entries).
 // Update these when adding/removing models.
+
+describe('dynamic model families', () => {
+  test('groups known and future variant names using the cloud family uid', () => {
+    expect(parseFamilyUid('swe-2-high', 'swe-2')).toEqual({
+      friendlyBase: 'swe-2',
+      variant: 'high',
+    });
+    expect(parseFamilyUid('swe-2-ultra-adaptive', 'swe-2')).toEqual({
+      friendlyBase: 'swe-2',
+      variant: 'ultra-adaptive',
+    });
+  });
+
+  test('handles dotted family ids and unprefixed cloud uids', () => {
+    expect(parseFamilyUid('claude-opus-4-7-max', 'claude-opus-4.7')).toEqual({
+      friendlyBase: 'claude-opus-4.7',
+      variant: 'max',
+    });
+    expect(parseFamilyUid('MODEL_FUTURE_REASONING', 'future-model')).toEqual({
+      friendlyBase: 'future-model',
+      variant: 'MODEL_FUTURE_REASONING',
+    });
+  });
+});
 
 describe('resolveModel variants', () => {
   test('defaults to family-default uid when no variant provided', () => {

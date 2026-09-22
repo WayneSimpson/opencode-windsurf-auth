@@ -70,7 +70,12 @@ const debugLog = (() => {
 import { WindsurfCredentials, WindsurfError } from './plugin/auth.js';
 import { resolveCredentials } from './plugin/credentials-resolver.js';
 import { loadCredentials as loadOAuthCredentials } from './oauth/storage.js';
-import type { ChatHistoryItem } from './cloud-direct/index.js';
+import type {
+  ChatHistoryItem,
+  CloudChatEvent,
+  CloudChatRequest,
+  ToolDef as CloudToolDef,
+} from './cloud-direct/index.js';
 import {
   getDefaultModel,
   getCanonicalModels,
@@ -79,6 +84,7 @@ import {
 import {
   resolveModelDynamic,
   getDynamicModelList,
+  type DynamicModelInfo,
 } from './plugin/dynamic-catalog.js';
 import { PLUGIN_ID } from './constants.js';
 
@@ -103,6 +109,8 @@ interface ChatCompletionRequest {
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  reasoning_effort?: string;
+  reasoning?: { effort?: string };
   tools?: Array<{
     type?: string;
     function?: {
@@ -114,6 +122,7 @@ interface ChatCompletionRequest {
   providerOptions?: Record<string, unknown>;
   /** Correlation ID for debug logging — set by the HTTP handler, threaded through to streamChatEvents. */
   debugRequestId?: string;
+  openClawCompatibility?: boolean;
 }
 
 /**
@@ -140,6 +149,203 @@ function getRequestedMaxTokens(request: { max_tokens?: number }): number {
 }
 
 type ToolDef = NonNullable<ChatCompletionRequest['tools']>[number];
+type JsonSchema = Record<string, unknown>;
+
+const OPENCLAW_UNSUPPORTED_SCHEMA_KEYS = new Set([
+  '$anchor',
+  '$comment',
+  '$dynamicAnchor',
+  '$dynamicRef',
+  '$id',
+  'contentEncoding',
+  'contentMediaType',
+  'deprecated',
+  'discriminator',
+  'externalDocs',
+  'readOnly',
+  'unevaluatedItems',
+  'unevaluatedProperties',
+  'writeOnly',
+  'xml',
+]);
+
+function isJsonSchema(value: unknown): value is JsonSchema {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function resolveLocalSchemaRef(root: JsonSchema, ref: string): unknown {
+  if (!ref.startsWith('#/')) return undefined;
+  let value: unknown = root;
+  for (const encoded of ref.slice(2).split('/')) {
+    if (!isJsonSchema(value)) return undefined;
+    const key = encoded.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') return undefined;
+    value = value[key];
+  }
+  return value;
+}
+
+function normalizeOpenClawSchemaNode(
+  value: unknown,
+  root: JsonSchema,
+  refs: ReadonlySet<string>,
+  depth: number,
+): unknown {
+  if (depth > 48) return {};
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeOpenClawSchemaNode(item, root, refs, depth + 1));
+  }
+  if (!isJsonSchema(value)) return value;
+
+  let source = value;
+  const ref = typeof source.$ref === 'string' ? source.$ref : undefined;
+  if (ref && !refs.has(ref)) {
+    const target = resolveLocalSchemaRef(root, ref);
+    if (isJsonSchema(target)) {
+      source = { ...target, ...source };
+      delete source.$ref;
+      refs = new Set([...refs, ref]);
+    }
+  }
+
+  const normalized: JsonSchema = {};
+  for (const [key, child] of Object.entries(source)) {
+    if (
+      key === '$defs' ||
+      key === 'definitions' ||
+      key === '$ref' ||
+      key === 'oneOf' ||
+      key === 'allOf' ||
+      OPENCLAW_UNSUPPORTED_SCHEMA_KEYS.has(key)
+    ) continue;
+    normalized[key] = normalizeOpenClawSchemaNode(child, root, refs, depth + 1);
+  }
+
+  if ('const' in source && !Array.isArray(normalized.enum)) {
+    normalized.enum = [normalizeOpenClawSchemaNode(source.const, root, refs, depth + 1)];
+    delete normalized.const;
+  }
+
+  const oneOf = Array.isArray(source.oneOf)
+    ? source.oneOf.map((item) => normalizeOpenClawSchemaNode(item, root, refs, depth + 1))
+    : undefined;
+  if (oneOf && oneOf.length > 0 && !Array.isArray(normalized.anyOf)) normalized.anyOf = oneOf;
+
+  if (Array.isArray(source.allOf)) {
+    for (const branch of source.allOf) {
+      const part = normalizeOpenClawSchemaNode(branch, root, refs, depth + 1);
+      if (!isJsonSchema(part)) continue;
+      if (isJsonSchema(part.properties)) {
+        normalized.properties = {
+          ...(isJsonSchema(normalized.properties) ? normalized.properties : {}),
+          ...part.properties,
+        };
+      }
+      if (Array.isArray(part.required)) {
+        normalized.required = [...new Set([
+          ...(Array.isArray(normalized.required) ? normalized.required : []),
+          ...part.required.filter((item): item is string => typeof item === 'string'),
+        ])];
+      }
+      for (const [key, child] of Object.entries(part)) {
+        if (key !== 'properties' && key !== 'required' && !(key in normalized)) normalized[key] = child;
+      }
+    }
+  }
+
+  return normalized;
+}
+
+export function normalizeOpenClawToolParameters(parameters: unknown): JsonSchema {
+  const root = isJsonSchema(parameters) ? parameters : {};
+  const normalized = normalizeOpenClawSchemaNode(root, root, new Set(), 0);
+  if (!isJsonSchema(normalized)) return { type: 'object', properties: {} };
+  if (normalized.type === undefined && isJsonSchema(normalized.properties)) normalized.type = 'object';
+  if (normalized.type !== 'object' && !Array.isArray(normalized.anyOf)) {
+    return { type: 'object', properties: {} };
+  }
+  return normalized;
+}
+
+export function normalizeOpenClawTools(tools: ToolDef[]): ToolDef[] {
+  return tools.flatMap((tool) => {
+    if (!tool || !isJsonSchema(tool.function)) return [];
+    const name = tool.function.name;
+    if (typeof name !== 'string' || name.length === 0) return [];
+    return [{
+      ...tool,
+      type: 'function',
+      function: {
+        ...tool.function,
+        name,
+        description: typeof tool.function.description === 'string' ? tool.function.description : '',
+        parameters: normalizeOpenClawToolParameters(tool.function.parameters),
+      },
+    }];
+  });
+}
+
+export function sanitizeOpenClawToolDescription(description: string): string {
+  return description
+    .normalize('NFKC')
+    .replace(/[^\x20-\x7E\n\t]/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 1024);
+}
+
+function isMcpConfigurationError(error: unknown): boolean {
+  return error instanceof Error && /MCP configuration issue/i.test(error.message);
+}
+
+export async function* streamOpenClawCompatibleEvents(
+  streamChatEvents: (request: CloudChatRequest) => AsyncGenerator<CloudChatEvent>,
+  request: CloudChatRequest,
+  enabled: boolean,
+): AsyncGenerator<CloudChatEvent> {
+  const tools = request.tools;
+  if (!enabled || !tools || tools.length === 0) {
+    yield* streamChatEvents(request);
+    return;
+  }
+
+  const sanitized = tools.map((tool) => ({
+    ...tool,
+    description: sanitizeOpenClawToolDescription(tool.description),
+  }));
+  const blank = sanitized.map((tool) => ({ ...tool, description: '' }));
+  const minimal = blank.map((tool) => ({
+    ...tool,
+    parameters: { type: 'object', properties: {} },
+  }));
+  const attempts: Array<{ mode: string; tools: CloudToolDef[] }> = [
+    { mode: 'original', tools },
+    { mode: 'sanitized', tools: sanitized },
+    { mode: 'blank', tools: blank },
+    { mode: 'minimal', tools: minimal },
+  ];
+  let lastError: unknown;
+
+  for (const attempt of attempts) {
+    let emitted = false;
+    try {
+      for await (const event of streamChatEvents({ ...request, tools: attempt.tools })) {
+        emitted = true;
+        yield event;
+      }
+      if (attempt.mode !== 'original') {
+        debugLog.log(`[windsurf-plugin] rid=${request.debugRequestId ?? 'n/a'} openclaw tool-description fallback=${attempt.mode}`);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      if (emitted || !isMcpConfigurationError(error)) throw error;
+    }
+  }
+
+  throw lastError;
+}
 
 /**
  * Map an opencode/OpenAI-shaped chat message into the ChatHistoryItem the
@@ -188,6 +394,17 @@ function extractVariantFromProviderOptions(providerOptions: Record<string, unkno
   return candidate;
 }
 
+export function extractRequestedVariant(request: {
+  providerOptions?: Record<string, unknown>;
+  reasoning_effort?: string;
+  reasoning?: { effort?: string };
+}): string | undefined {
+  const explicit = extractVariantFromProviderOptions(request.providerOptions);
+  if (explicit) return explicit.trim().toLowerCase() || undefined;
+  const effort = request.reasoning_effort ?? request.reasoning?.effort;
+  return typeof effort === 'string' ? effort.trim().toLowerCase() || undefined : undefined;
+}
+
 interface ChatCompletionResponse {
   id: string;
   object: string;
@@ -218,7 +435,7 @@ function createStreamingResponse(
   const encoder = new TextEncoder();
   const responseId = `chatcmpl-${crypto.randomUUID()}`;
   const requestedModel = request.model || getDefaultModel();
-  const variantOverride = extractVariantFromProviderOptions(request.providerOptions);
+  const variantOverride = extractRequestedVariant(request);
 
   const abort = new AbortController();
   // Declare rid outside the try block so the catch block can reference it
@@ -281,7 +498,7 @@ function createStreamingResponse(
         //   2. 128_000 fallback — matches the catalog's `maxOutputTokens`
         //      for the most permissive models. The cloud clamps to the
         //      per-model limit anyway.
-        for await (const ev of streamChatEvents({
+        const cloudRequest: CloudChatRequest = {
           apiKey: credentials.apiKey,
           apiServerUrl: credentials.apiServerUrl,
           modelUid: resolved.modelUid,
@@ -292,7 +509,12 @@ function createStreamingResponse(
             maxOutputTokens: requestedMaxTokens,
           },
           debugRequestId: rid,
-        })) {
+        };
+        for await (const ev of streamOpenClawCompatibleEvents(
+          streamChatEvents,
+          cloudRequest,
+          request.openClawCompatibility === true,
+        )) {
           eventCount++;
           if (eventCount === 1) debugLog.log(`[windsurf-plugin] rid=${rid} pid=${process.pid} stream first_event_ms=${Date.now() - t0} kind=${ev.kind}`);
           // @ai-sdk expects `delta.role: 'assistant'` on the *first* chunk
@@ -494,7 +716,7 @@ async function createNonStreamingResponse(
 ): Promise<ChatCompletionResponse> {
   const responseId = `chatcmpl-${crypto.randomUUID()}`;
   const requestedModel = request.model || getDefaultModel();
-  const variantOverride = extractVariantFromProviderOptions(request.providerOptions);
+  const variantOverride = extractRequestedVariant(request);
   const host = (credentials.apiServerUrl ?? 'https://server.codeium.com').replace(/\/$/, '');
   const resolved = await resolveModelDynamic(
     requestedModel,
@@ -529,7 +751,7 @@ async function createNonStreamingResponse(
   const collectedToolCalls: CollectedToolCall[] = [];
   let currentToolCall: CollectedToolCall | null = null;
 
-  for await (const ev of streamChatEvents({
+  const cloudRequest: CloudChatRequest = {
     apiKey: credentials.apiKey,
     apiServerUrl: credentials.apiServerUrl,
     modelUid: resolved.modelUid,
@@ -543,7 +765,12 @@ async function createNonStreamingResponse(
     // cloud request and the billable token usage with it.
     signal,
     debugRequestId: rid,
-  })) {
+  };
+  for await (const ev of streamOpenClawCompatibleEvents(
+    streamChatEvents,
+    cloudRequest,
+    request.openClawCompatibility === true,
+  )) {
     if (ev.kind === 'text') {
       collected += ev.text;
     } else if (ev.kind === 'tool_call_start') {
@@ -845,8 +1072,63 @@ function openAIError(status: number, message: string, details?: string): Respons
   );
 }
 
+type OpenAIModelRow = {
+  id: string;
+  object: 'model';
+  created: number;
+  owned_by: 'windsurf';
+  name: string;
+  context_window?: number;
+  max_tokens?: number;
+  supports_images?: true;
+  reasoning?: boolean;
+  default_variant?: string;
+  available_variants?: string[];
+  supported_reasoning_efforts?: string[];
+  variants?: Array<{ id: string; model_id: string; description: string }>;
+};
+
+function isReasoningEffortVariant(variant: string): boolean {
+  return /^(none|minimal|low|medium|high|xhigh|max|thinking)$/.test(variant);
+}
+
+export function buildOpenAIModelRows(
+  models: DynamicModelInfo[],
+  created = Math.floor(Date.now() / 1000),
+): OpenAIModelRow[] {
+  return models.map((model) => {
+    const variants = Object.entries(model.variants ?? {});
+    const efforts = variants.map(([name]) => name).filter(isReasoningEffortVariant);
+    return {
+      id: model.id,
+      name: model.label,
+      object: 'model' as const,
+      created,
+      owned_by: 'windsurf' as const,
+      ...(model.contextWindow ? { context_window: model.contextWindow } : {}),
+      ...(model.maxTokens ? { max_tokens: model.maxTokens } : {}),
+      ...(model.supportsImages ? { supports_images: true as const } : {}),
+      ...(variants.length > 0
+        ? {
+            default_variant: model.defaultVariant,
+            available_variants: variants.map(([name]) => name),
+            variants: variants.map(([name, variant]) => ({
+              id: name,
+              model_id: `${model.id}:${name}`,
+              description: variant.description,
+            })),
+          }
+        : {}),
+      ...(efforts.length > 0
+        ? { reasoning: true, supported_reasoning_efforts: efforts }
+        : {}),
+    };
+  });
+}
+
 export function createProxyHandler(
   authorize: (req: Request) => Promise<Response | null>,
+  options: { normalizeOpenClawTools?: boolean; debugName?: string } = {},
 ): (req: Request) => Promise<Response> {
   return async (req: Request): Promise<Response> => {
     try {
@@ -880,22 +1162,7 @@ export function createProxyHandler(
             return new Response(
               JSON.stringify({
                 object: 'list',
-                data: dynamicModels.map((m) => ({
-                  id: m.id,
-                  object: 'model',
-                  created: Math.floor(Date.now() / 1000),
-                  owned_by: 'windsurf',
-                  ...(m.maxTokens ? { max_tokens: m.maxTokens } : {}),
-                  ...(m.supportsImages ? { supports_images: true } : {}),
-                  ...(m.variants
-                    ? {
-                        variants: Object.entries(m.variants).map(([name, v]) => ({
-                          id: name,
-                          description: v.description,
-                        })),
-                      }
-                    : {}),
-                })),
+                data: buildOpenAIModelRows(dynamicModels),
               }),
               { status: 200, headers: { 'Content-Type': 'application/json' } }
             );
@@ -904,27 +1171,27 @@ export function createProxyHandler(
           // Dynamic catalog fetch failed — fall through to static
         }
         // Static fallback
-        const models = getCanonicalModels();
+        const models: DynamicModelInfo[] = getCanonicalModels().map((id) => {
+          const variants = getModelVariants(id);
+          return {
+            id,
+            label: id,
+            ...(variants
+              ? {
+                  variants: Object.fromEntries(
+                    Object.entries(variants).map(([name, meta]) => [
+                      name,
+                      { id: name, description: meta.description ?? `${id} (${name})` },
+                    ]),
+                  ),
+                }
+              : {}),
+          };
+        });
         return new Response(
           JSON.stringify({
             object: 'list',
-            data: models.map((id) => {
-              const variants = getModelVariants(id);
-              return {
-                id,
-                object: 'model',
-                created: Math.floor(Date.now() / 1000),
-                owned_by: 'windsurf',
-                ...(variants
-                  ? {
-                      variants: Object.entries(variants).map(([name, meta]) => ({
-                        id: name,
-                        description: meta.description,
-                      })),
-                    }
-                  : {}),
-              };
-            }),
+            data: buildOpenAIModelRows(models),
           }),
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
@@ -983,6 +1250,12 @@ export function createProxyHandler(
           if (!requestBody || typeof requestBody !== 'object' || !Array.isArray(requestBody.messages)) {
             return openAIError(400, 'Malformed request body — `messages` must be an array.');
           }
+          if (options.normalizeOpenClawTools) {
+            requestBody.openClawCompatibility = true;
+            if (Array.isArray(requestBody.tools)) {
+              requestBody.tools = normalizeOpenClawTools(requestBody.tools);
+            }
+          }
           // Stamp a correlation ID on the request body so both the streaming
           // and non-streaming paths can log it via getDebugRequestId().
           requestBody.debugRequestId = crypto.randomUUID();
@@ -1002,7 +1275,8 @@ export function createProxyHandler(
               // Dump full tool definitions for the first 3 + any whose
               // parameters look suspicious ($ref / discriminator / oneOf)
               try {
-                const dumpPath = path.join(os.tmpdir(), 'opencode-windsurf-auth-debug', 'tools-dump.json');
+                const dumpName = options.debugName ? `tools-dump-${options.debugName}.json` : 'tools-dump.json';
+                const dumpPath = path.join(os.tmpdir(), 'opencode-windsurf-auth-debug', dumpName);
                 // Tighten parent dir + file mode to 0700 / 0600 so the
                 // dumped tool schemas (which can include user file paths
                 // in descriptions) aren't world-readable on shared hosts.
@@ -1442,7 +1716,10 @@ async function ensureOpenClawListener(): Promise<void> {
     }
 
     const port = resolveOpenClawPort();
-    const handler = createProxyHandler(createStaticTokenAuthorizer(token));
+    const handler = createProxyHandler(createStaticTokenAuthorizer(token), {
+      normalizeOpenClawTools: true,
+      debugName: 'openclaw',
+    });
     try {
       const server = await startLoopbackServer(handler, port, host);
       debugLog.log(`[windsurf-plugin] openclaw listener ready pid=${process.pid} host=${host} port=${server.port}`);

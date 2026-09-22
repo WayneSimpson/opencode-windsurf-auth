@@ -8,6 +8,12 @@ import {
   createStaticTokenAuthorizer,
   createProxyHandler,
   startLoopbackServer,
+  normalizeOpenClawToolParameters,
+  normalizeOpenClawTools,
+  sanitizeOpenClawToolDescription,
+  streamOpenClawCompatibleEvents,
+  extractRequestedVariant,
+  buildOpenAIModelRows,
 } from '../../src/plugin.js';
 
 const TEST_TOKEN = 'test-openclaw-token-0123456789abcdef';
@@ -63,6 +69,216 @@ describe('getOpenClawToken', () => {
   test('rejects unusable tokens', () => {
     expect(() => getOpenClawToken({ WINDSURF_OPENCLAW_TOKEN: '   ' })).toThrow();
     expect(() => getOpenClawToken({ WINDSURF_OPENCLAW_TOKEN: 'tok\nen' })).toThrow();
+  });
+});
+
+describe('OpenClaw model capabilities', () => {
+  test('maps standard reasoning controls to Windsurf variants', () => {
+    expect(extractRequestedVariant({ reasoning_effort: ' HIGH ' })).toBe('high');
+    expect(extractRequestedVariant({ reasoning: { effort: 'Max' } })).toBe('max');
+  });
+
+  test('keeps an explicit Windsurf variant ahead of reasoning effort', () => {
+    expect(extractRequestedVariant({
+      providerOptions: { windsurf: { variant: 'medium' } },
+      reasoning_effort: 'high',
+    })).toBe('medium');
+  });
+
+  test('keeps one model row while exposing live variant metadata', () => {
+    const rows = buildOpenAIModelRows([{
+      id: 'swe-2',
+      label: 'SWE-2 High',
+      defaultVariant: 'high',
+      contextWindow: 1000000,
+      maxTokens: 200000,
+      variants: {
+        high: { id: 'high', description: 'SWE-2 High' },
+        medium: { id: 'medium', description: 'SWE-2 Medium' },
+        max: { id: 'max', description: 'SWE-2 Max' },
+        'high-fast': { id: 'high-fast', description: 'SWE-2 High Fast' },
+      },
+    }], 123);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: 'swe-2',
+      created: 123,
+      reasoning: true,
+      default_variant: 'high',
+      context_window: 1000000,
+      max_tokens: 200000,
+      available_variants: ['high', 'medium', 'max', 'high-fast'],
+      supported_reasoning_efforts: ['high', 'medium', 'max'],
+    });
+    expect(rows[0]?.variants?.map((variant) => variant.model_id)).toEqual([
+      'swe-2:high',
+      'swe-2:medium',
+      'swe-2:max',
+      'swe-2:high-fast',
+    ]);
+  });
+});
+
+describe('OpenClaw tool schema compatibility', () => {
+  test('leaves the proven OpenCode-compatible schema shape intact', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        query: { type: 'string', minLength: 1, examples: ['term'] },
+        limit: { type: ['integer', 'null'], minimum: 1, nullable: true },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    };
+    expect(normalizeOpenClawToolParameters(schema)).toEqual(schema);
+  });
+
+  test('inlines local refs and removes definition containers', () => {
+    const normalized = normalizeOpenClawToolParameters({
+      type: 'object',
+      properties: {
+        message: { $ref: '#/$defs/message' },
+      },
+      required: ['message'],
+      $defs: {
+        message: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        },
+      },
+    });
+    expect(normalized).toEqual({
+      type: 'object',
+      properties: {
+        message: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        },
+      },
+      required: ['message'],
+    });
+  });
+
+  test('normalizes OpenAPI and union constructs to Cognition-safe JSON Schema', () => {
+    expect(normalizeOpenClawToolParameters({
+      type: 'object',
+      properties: {
+        mode: { const: 'fast', deprecated: true },
+        target: {
+          oneOf: [{ type: 'string' }, { type: 'integer' }],
+          discriminator: { propertyName: 'type' },
+        },
+        note: { type: 'string', nullable: true },
+      },
+      unevaluatedProperties: false,
+    })).toEqual({
+      type: 'object',
+      properties: {
+        mode: { enum: ['fast'] },
+        target: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+        note: { type: 'string', nullable: true },
+      },
+    });
+  });
+
+  test('merges object allOf branches', () => {
+    expect(normalizeOpenClawToolParameters({
+      allOf: [
+        { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        { type: 'object', properties: { depth: { type: 'integer' } }, required: ['depth'] },
+      ],
+    })).toEqual({
+      properties: {
+        path: { type: 'string' },
+        depth: { type: 'integer' },
+      },
+      required: ['path', 'depth'],
+      type: 'object',
+    });
+  });
+
+  test('drops malformed tools and normalizes valid tools without mutation', () => {
+    const tools = [
+      {
+        type: 'function',
+        function: {
+          name: 'lookup',
+          description: 'Look up a record',
+          parameters: {
+            type: 'object',
+            properties: { id: { $ref: '#/definitions/id' } },
+            definitions: { id: { type: 'string' } },
+          },
+        },
+      },
+      { type: 'function', function: { description: 'missing name', parameters: {} } },
+    ];
+    const normalized = normalizeOpenClawTools(tools);
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]?.function?.parameters).toEqual({
+      type: 'object',
+      properties: { id: { type: 'string' } },
+    });
+    expect(tools[0]?.function?.parameters).toHaveProperty('definitions');
+  });
+
+  test('sanitizes arbitrary descriptions without catalog-specific rules', () => {
+    const description = `  Tool\u0000 description\twith café.${' example'.repeat(300)}  `;
+    const sanitized = sanitizeOpenClawToolDescription(description);
+    expect(sanitized.length).toBeLessThanOrEqual(1024);
+    expect(sanitized).not.toContain('\u0000');
+    expect(sanitized).not.toContain('é');
+    expect(sanitized.startsWith('Tool description with caf')).toBe(true);
+  });
+
+  test('retries a pre-output MCP error with dynamically sanitized descriptions', async () => {
+    const descriptions: string[] = [];
+    const stream = async function* (request: { tools?: Array<{ description: string }> }) {
+      const description = request.tools?.[0]?.description ?? '';
+      descriptions.push(description);
+      if (descriptions.length === 1) throw new Error('Unable to process request due to an MCP configuration issue.');
+      yield { kind: 'text' as const, text: 'OK' };
+    };
+    const events = [];
+    for await (const event of streamOpenClawCompatibleEvents(stream as never, {
+      apiKey: 'test',
+      modelUid: 'test',
+      messages: [],
+      tools: [{ name: 'test', description: `café ${'example '.repeat(300)}`, parameters: {} }],
+    }, true)) events.push(event);
+    expect(events).toEqual([{ kind: 'text', text: 'OK' }]);
+    expect(descriptions).toHaveLength(2);
+    expect(descriptions[1]?.length).toBeLessThanOrEqual(1024);
+    expect(descriptions[1]).not.toContain('é');
+  });
+
+  test('falls back to a minimal dynamic schema only when earlier attempts fail', async () => {
+    const attempts: Array<{ description: string; parameters: unknown }> = [];
+    const stream = async function* (request: { tools?: Array<{ description: string; parameters: unknown }> }) {
+      const tool = request.tools?.[0];
+      attempts.push({ description: tool?.description ?? '', parameters: tool?.parameters });
+      if (attempts.length < 4) throw new Error('Unable to process request due to an MCP configuration issue.');
+      yield { kind: 'text' as const, text: 'OK' };
+    };
+    const events = [];
+    for await (const event of streamOpenClawCompatibleEvents(stream as never, {
+      apiKey: 'test',
+      modelUid: 'test',
+      messages: [],
+      tools: [{
+        name: 'future_tool',
+        description: 'Future tool definition',
+        parameters: { type: 'object', properties: { value: { type: 'string' } } },
+      }],
+    }, true)) events.push(event);
+    expect(events).toEqual([{ kind: 'text', text: 'OK' }]);
+    expect(attempts).toHaveLength(4);
+    expect(attempts[3]).toEqual({
+      description: '',
+      parameters: { type: 'object', properties: {} },
+    });
   });
 });
 

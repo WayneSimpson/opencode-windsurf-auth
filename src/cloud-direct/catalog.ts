@@ -68,6 +68,10 @@ export interface ModelCatalogEntry {
   isBeta?: boolean;
   /** Recommended flag (field #11). */
   isRecommended?: boolean;
+  modelFamilyUid?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  isDefaultModelInFamily?: boolean;
 }
 
 interface CacheEntry {
@@ -156,6 +160,10 @@ async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal):
     let isPremium: boolean | undefined;
     let isBeta: boolean | undefined;
     let isRecommended: boolean | undefined;
+    let modelFamilyUid: string | undefined;
+    let contextWindow: number | undefined;
+    let maxOutputTokens: number | undefined;
+    let isDefaultModelInFamily: boolean | undefined;
     for (const sf of iterFields(f.value as Buffer)) {
       if (sf.num === 1 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
         label = (sf.value as Buffer).toString('utf8');
@@ -179,6 +187,18 @@ async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal):
       } else if (sf.num === 18 && sf.wire === 0) {
         // #18 = max_tokens (int32)
         maxTokens = Number(sf.value);
+      } else if (sf.num === 23 && sf.wire === 2 && Buffer.isBuffer(sf.value)) {
+        for (const infoField of iterFields(sf.value as Buffer)) {
+          if (infoField.num === 4 && infoField.wire === 0) {
+            contextWindow = Number(infoField.value);
+          } else if (infoField.num === 13 && infoField.wire === 0) {
+            maxOutputTokens = Number(infoField.value);
+          } else if (infoField.num === 23 && infoField.wire === 2 && Buffer.isBuffer(infoField.value)) {
+            modelFamilyUid = (infoField.value as Buffer).toString('utf8');
+          }
+        }
+      } else if (sf.num === 31 && sf.wire === 0) {
+        isDefaultModelInFamily = sf.value === 1n;
       }
     }
     if (modelUid.length > 0) {
@@ -191,6 +211,10 @@ async function fetchCatalog(apiKey: string, host: string, signal?: AbortSignal):
         isPremium,
         isBeta,
         isRecommended,
+        modelFamilyUid,
+        contextWindow,
+        maxOutputTokens,
+        isDefaultModelInFamily,
       });
     }
   }

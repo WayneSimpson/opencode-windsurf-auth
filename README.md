@@ -223,14 +223,44 @@ apiKey:  <the same token>
 
 The Bearer token is still required on every `/v1/*` request — the endpoint is reachable from the tailnet but not open. Only the OpenClaw listener binds the Tailscale address; the OpenCode proxy stays on `127.0.0.1`. An invalid `WINDSURF_OPENCLAW_HOST` disables only the OpenClaw listener and is logged.
 
+### Model discovery and reasoning
+
+`/v1/models` returns one compact row per account-enabled Cognition model family. Each row includes the live default variant, all available variants, supported reasoning efforts, context window, output limit, and image capability. Modern models are grouped using Cognition's authoritative `model_family_uid` and `is_default_model_in_family` fields, so newly added model families and variant names appear after the catalog cache refresh without a plugin update. Opaque legacy `MODEL_*` identifiers still use the static fallback catalog.
+
+OpenClaw can send either standard reasoning shape:
+
+```json
+{ "reasoning_effort": "high" }
+{ "reasoning": { "effort": "high" } }
+```
+
+The plugin resolves that value against the selected model family's live variants. It does not create a separate top-level model row for every variant, so clients can present one model plus a reasoning picker instead of a very large model list. Direct model IDs such as `swe-2:medium` remain accepted for aliases and automation.
+
+OpenClaw's Gateway owns sessions, provider credentials, model configuration, and inference. A paired node provides execution, browser, and node-hosted MCP tools; changing this node's `openclaw.json` does not configure the remote Gateway's model picker. A Gateway-side provider integration must consume the capability metadata returned by `/v1/models`.
+
+OpenClaw can send tool catalogs that Cognition rejects with the misleading `MCP configuration issue` message even though the tools are valid. The OpenClaw route retries only pre-output failures of that exact type with normalized descriptions, then blank descriptions, and finally minimal schemas. The OpenCode route does not use this compatibility fallback.
+
 Notes:
 
-- The token is static and shared only with OpenClaw. It is never logged or written to disk by the plugin — keep it out of git.
-- `/v1/models` and `/v1/chat/completions` behave exactly like the OpenCode endpoint (streaming, tool calls, reasoning, images). `/health` is unauthenticated and returns `{ "ok": true }`.
+- The token is static and shared only with OpenClaw. It is never logged by the plugin; keep the service environment and Gateway SecretRef out of git.
+- `/v1/chat/completions` supports streaming, tool calls, reasoning, usage, and images. `/health` is unauthenticated and returns `{ "ok": true }`.
 - If the port is taken or the token is missing/invalid, only the OpenClaw listener fails — OpenCode keeps working. Check `WINDSURF_PLUGIN_DEBUG=1` logs for the reason.
+- Debug logging records prompt excerpts and tool definitions in mode-`0600` files; enable it only while troubleshooting.
 - Both listeners share the same upstream account, so they share upstream quotas and rate limits.
 
 ## Troubleshooting
+
+<details>
+<summary><strong>"This model is only in Devin Local"</strong></summary>
+
+Cognition may list a model in `GetCascadeModelConfigs` but reject chat with:
+
+```text
+This model is only in Devin Local. (trace ID: ...)
+```
+
+This is an upstream product-availability restriction, not a proxy, authentication, tool-schema, or variant-resolution error. Select another account-enabled model that currently accepts `GetChatMessage`. The response may reflect Cognition moving specific model routes toward Devin Local, but that broader migration has not been confirmed. The plugin intentionally keeps the catalog entry visible for now so availability can be revisited if Cognition changes the route later.
+</details>
 
 <details>
 <summary><strong>Windsurf proxy port is already in use</strong></summary>

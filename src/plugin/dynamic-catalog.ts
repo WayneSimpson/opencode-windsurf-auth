@@ -34,10 +34,12 @@ export interface DynamicCatalogEntry {
   id: string;
   /** Cloud model_uid for the default variant (e.g. "claude-opus-4-7-medium") */
   defaultUid: string;
+  defaultVariant?: string;
   /** Human label from the cloud (e.g. "Claude Opus 4.7 Medium") */
   label: string;
   /** Per-model context/output limit from the cloud */
   maxTokens?: number;
+  contextWindow?: number;
   /** Whether the model accepts image attachments */
   supportsImages?: boolean;
   /** Variants keyed by variant name (lowercase) */
@@ -103,6 +105,21 @@ const VARIANT_SUFFIXES: string[] = [
  *   deepseek-v4                → { friendlyBase: "deepseek-v4", variant: undefined }
  *   kimi-k2-6                  → { friendlyBase: "kimi-k2.6", variant: undefined }
  */
+export function parseFamilyUid(
+  uid: string,
+  familyUid: string,
+): { friendlyBase: string; variant?: string } {
+  const candidates = [...new Set([familyUid, familyUid.replace(/\./g, '-')])]
+    .sort((a, b) => b.length - a.length);
+  for (const candidate of candidates) {
+    if (uid === candidate) return { friendlyBase: familyUid };
+    if (uid.startsWith(`${candidate}-`)) {
+      return { friendlyBase: familyUid, variant: uid.slice(candidate.length + 1) };
+    }
+  }
+  return { friendlyBase: familyUid, variant: uid };
+}
+
 function parseStringUid(uid: string): { friendlyBase: string; variant?: string } {
   const segments = uid.split('-');
 
@@ -199,7 +216,9 @@ export async function buildDynamicCatalog(
       addToCatalog(catalog, legacy.friendlyBase, uid, entry, legacy.variant, legacy.description);
     } else {
       // String UID — auto-parse friendly name + variant
-      const parsed = parseStringUid(uid);
+      const parsed = entry.modelFamilyUid
+        ? parseFamilyUid(uid, entry.modelFamilyUid)
+        : parseStringUid(uid);
       addToCatalog(catalog, parsed.friendlyBase, uid, entry, parsed.variant, entry.label);
     }
   }
@@ -224,8 +243,10 @@ function addToCatalog(
     entry = {
       id: friendlyBase,
       defaultUid: uid,
+      defaultVariant: variant,
       label: cloudEntry.label,
-      maxTokens: cloudEntry.maxTokens,
+      maxTokens: cloudEntry.maxOutputTokens ?? cloudEntry.maxTokens,
+      contextWindow: cloudEntry.contextWindow,
       supportsImages: cloudEntry.supportsImages,
     };
     catalog[friendlyBase] = entry;
@@ -243,10 +264,22 @@ function addToCatalog(
     }
   }
 
+  if (cloudEntry.isDefaultModelInFamily) {
+    entry.defaultUid = uid;
+    entry.defaultVariant = variant;
+  }
+
   // Update maxTokens/supportsImages if we see a higher value (take the
   // most permissive setting across variants)
-  if (cloudEntry.maxTokens && (!entry.maxTokens || cloudEntry.maxTokens > entry.maxTokens)) {
-    entry.maxTokens = cloudEntry.maxTokens;
+  const maxTokens = cloudEntry.maxOutputTokens ?? cloudEntry.maxTokens;
+  if (maxTokens && (!entry.maxTokens || maxTokens > entry.maxTokens)) {
+    entry.maxTokens = maxTokens;
+  }
+  if (
+    cloudEntry.contextWindow &&
+    (!entry.contextWindow || cloudEntry.contextWindow > entry.contextWindow)
+  ) {
+    entry.contextWindow = cloudEntry.contextWindow;
   }
   if (cloudEntry.supportsImages && !entry.supportsImages) {
     entry.supportsImages = true;
@@ -262,7 +295,9 @@ function addToCatalog(
 export interface DynamicModelInfo {
   id: string;
   label: string;
+  defaultVariant?: string;
   maxTokens?: number;
+  contextWindow?: number;
   supportsImages?: boolean;
   variants?: Record<string, { id: string; description: string }>;
 }
@@ -285,7 +320,9 @@ export async function getDynamicModelList(
       const info: DynamicModelInfo = {
         id: entry.id,
         label: entry.label,
+        defaultVariant: entry.defaultVariant,
         maxTokens: entry.maxTokens,
+        contextWindow: entry.contextWindow,
         supportsImages: entry.supportsImages,
       };
       if (entry.variants) {

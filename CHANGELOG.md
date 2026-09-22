@@ -1,5 +1,23 @@
 # Changelog
 
+### 2026-09-20 11:15:31 +01:00 — Add a remote OpenClaw route with dynamic model capabilities
+- Type: Added/Fixed
+- Scope: api/auth/models/tools/docs
+- Files:
+  - `src/plugin.ts`: add the independent Bearer-gated OpenClaw listener; static-token authorization; configurable host/port; compact capability-rich `/v1/models`; standard `reasoning_effort` and `reasoning.effort` routing; separate protected debug captures; OpenClaw-only tool-schema normalization and adaptive MCP-validation fallback
+  - `src/cloud-direct/catalog.ts`: decode authoritative `model_info.model_family_uid`, native context window, maximum output tokens, and `is_default_model_in_family` from the live Cognition catalog
+  - `src/plugin/dynamic-catalog.ts`: group modern models by the cloud family UID, discover arbitrary future variant suffixes, select the cloud-designated default, and retain the static fallback for opaque legacy `MODEL_*` identifiers
+  - `tests/unit/openclaw-listener.test.ts`: cover listener isolation/authentication, host validation, model capability metadata, reasoning controls, schema normalization, and adaptive tool-description/schema retries
+  - `tests/unit/variant.test.ts`: cover authoritative family grouping, dotted family IDs, and unknown future variant names
+  - `README.md`: document remote Gateway/node topology, compact model discovery, reasoning selection, tool compatibility behavior, security/logging constraints, and the Devin Local-only upstream response
+- Rationale: OpenClaw's Gateway runs on a different server from the paired execution node and needs a dedicated Tailscale-reachable OpenAI-compatible route without learning OpenCode's process secret. Generic OpenClaw tool catalogs also exposed a Cognition validator bug: valid large descriptions return `failed_precondition: Unable to process request due to an MCP configuration issue`. The route now retries only that pre-output error with progressively safer metadata while preserving normal OpenCode behavior.
+- Model catalog: `/v1/models` exposes one row per account-enabled model family rather than one row per variant. Rows include `default_variant`, `available_variants`, `supported_reasoning_efforts`, `context_window`, `max_tokens`, image support, and nested variant IDs. The Gateway can therefore show one model and use its reasoning picker. Modern models and new variant names are discovered from live Cognition family metadata; the cache refresh interval remains ten minutes.
+- Route isolation: OpenClaw-only request normalization and MCP fallback are enabled only on the optional listener. OpenCode keeps its compact catalog, `providerOptions.windsurf.variant` flow, per-process authentication, and original tool payload behavior. The improved family/default/context parsing is shared by both routes.
+- Verification: 47 tests pass; TypeScript typecheck and build pass. Live OpenClaw traffic with 191 tools produced reasoning and final text after the blank-description fallback. Live `swe-2` requests with `reasoning_effort` values `medium`, `high`, and `max` resolved to `swe-2-medium`, `swe-2-high`, and `swe-2-max` respectively; subsequent inference was blocked only by the account's temporary free-model rate limit.
+- Risk/Impact: On the first request for a tool catalog that Cognition rejects, the OpenClaw route can make additional upstream validation attempts before yielding output. The successful blank-description mode preserves names and parameter schemas but gives the model less tool-selection guidance; the minimal-schema mode is a last resort. Both listeners still share the same Cognition quota.
+- Rollback hint: remove the OpenClaw listener environment variables and restart OpenCode to disable the remote route; revert the files above and rebuild to remove capability discovery/retry behavior. No Gateway or node configuration is modified by the plugin itself.
+- Notes: Some catalog-listed models now return `This model is only in Devin Local. (trace ID: ...)`. This is an upstream product-availability restriction, not a proxy failure. It may indicate Cognition is moving specific routes away from Cascade/GetChatMessage toward Devin Local, but that wider migration is not confirmed. Keep the finding documented and revisit later; do not prioritize automatic filtering while the desired models continue to work.
+
 ### 2026-09-15 13:05:00 +01:00 — Wire opencode variants to real cloud model UIDs
 - Type: Fixed
 - Scope: config/docs
